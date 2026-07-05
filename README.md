@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./docs/assets/ignition-logo.png" alt="Ignition logo" width="220"/>
+  <img src="./docs/assets/ignition-logo.png" alt="Ignition logo" width="450"/>
 </p>
 
 <h1 align="center">🔥 Ignition</h1>
