@@ -1,0 +1,17 @@
+{
+  "name": "ignition-ast-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "bun run server.ts",
+    "dev": "bun --watch server.ts"
+  },
+  "dependencies": {
+    "ts-morph": "^23.0.0",
+    "dependency-cruiser": "^16.4.0",
+    "elysia": "^1.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

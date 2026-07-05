@@ -1,0 +1,7 @@
+workspaces/
+ast-analyzer/workspaces/
+node_modules/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
