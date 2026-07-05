@@ -5,10 +5,15 @@ deterministic registry checks + lightweight semantic scoring.
 Phase 1: deterministic OSV/registry API lookups (no LLM)
 Phase 2: semantic slopsquat/typosquat heuristics (LLM)
 """
+import logging
 from pathlib import Path
 import httpx
 
 from app.graph.state import ReviewState, Finding
+from app.services.llm_client import LLMClient
+from app.services.finding_parser import parse_findings_json
+
+logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_2c_security.md"
 
@@ -37,8 +42,15 @@ async def _phase1_deterministic_registry_check(package_name: str, version: str) 
 async def _phase2_semantic_slopsquat_check(package_name: str) -> list[Finding]:
     """Semantic heuristics for freshly-published / slopsquatted packages."""
     prompt_template = PROMPT_PATH.read_text()
-    # TODO: wire up LLM call for slopsquat/typosquat heuristic scoring
-    return []
+    llm = LLMClient()
+    prompt = prompt_template.format(package_name=package_name)
+
+    try:
+        raw_response = await llm.complete(prompt)
+        return parse_findings_json(raw_response, agent_name="agent_2c_security")
+    except Exception:
+        logger.exception("agent_2c_security phase-2 LLM call failed for %s; skipping", package_name)
+        return []
 
 
 async def agent_2c_security(state: ReviewState) -> dict:

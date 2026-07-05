@@ -6,15 +6,22 @@ are delegated out:
   - exact-lookup hallucination verification -> graph/verification/symbol_lookup.py
   - ACS + regression math                   -> graph/scoring.py
 
-This keeps this file readable as "what happens", not "how the math/lookup
-works" — and keeps those two pieces unit-testable in isolation.
+The severity decision (_decide_hitl_severity) and the HITL gate it drives
+are DELIBERATELY pure code, never LLM output — that's the whole point of
+"deterministic escalation" from the PRD. The LLM is used only to write the
+human-readable narrative on top of a verdict that's already been decided.
+If that LLM call fails, the deterministic markdown rendering still works.
 """
+import logging
 from pathlib import Path
 
 from app.graph.state import ReviewState, Finding
 from app.graph.verification.symbol_lookup import verify_symbol_exists, SymbolLookupError
 from app.graph.scoring import compute_acs, is_rule_regression
 from app.repositories.ledger import LedgerRepository
+from app.services.llm_client import LLMClient
+
+logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_3_critic.md"
 
@@ -55,6 +62,26 @@ def _decide_hitl_severity(verified_findings: list[Finding]) -> str:
     return "none"
 
 
+async def _generate_narrative(prompt_template: str, verified_findings: list[Finding]) -> str | None:
+    """
+    LLM-authored prose summary ONLY. Never touches severity, never touches
+    the HITL decision — those are already final by the time this runs.
+    Returns None on any failure so the caller falls back to plain rendering.
+    """
+    if not verified_findings:
+        return None
+
+    llm = LLMClient()
+    findings_json = [f.model_dump() for f in verified_findings]
+    prompt = prompt_template.format(verified_findings=findings_json)
+
+    try:
+        return await llm.complete(prompt, json_mode=False)
+    except Exception:
+        logger.exception("Critic narrative generation failed; falling back to plain rendering")
+        return None
+
+
 async def agent_3_critic(state: ReviewState) -> dict:
     verified_findings, hallucinated_count = _verify_findings(state)
 
@@ -71,11 +98,10 @@ async def agent_3_critic(state: ReviewState) -> dict:
     if regression and hitl_severity not in ("critical", "high"):
         hitl_severity = "high"  # regressions are never silently downgraded
 
-    # Signal for routing.route_after_critic: None acs_score would mean
-    # "verification incomplete" — here it's always set, so no retry is
-    # triggered on this path. Retries are triggered instead when
-    # hallucinated_count is high enough that findings can't be trusted yet.
     should_retry = hallucinated_count > 0 and state.hallucination_retry_count == 0
+
+    prompt_template = PROMPT_PATH.read_text()
+    narrative = await _generate_narrative(prompt_template, verified_findings)
 
     return {
         "verified_findings": verified_findings,
@@ -83,14 +109,18 @@ async def agent_3_critic(state: ReviewState) -> dict:
         "is_regression": regression,
         "hitl_severity": hitl_severity,
         "hallucination_retry_count": 1 if should_retry else 0,
-        "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression),
+        "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression, narrative),
     }
 
 
-def _render_markdown(findings: list[Finding], acs_score: float, regression: bool) -> str:
+def _render_markdown(
+    findings: list[Finding], acs_score: float, regression: bool, narrative: str | None
+) -> str:
     lines = [f"## Ignition Review — ACS: {acs_score:.1f}"]
     if regression:
         lines.append("**Rule regression detected against baseline.**")
+    if narrative:
+        lines.append(narrative)
     for f in findings:
         lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {f.description}")
     return "\n".join(lines) if findings else "No findings. Clean pass."
