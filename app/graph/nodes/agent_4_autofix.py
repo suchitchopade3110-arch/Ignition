@@ -8,9 +8,12 @@ naively. This node is where that sequencing/conflict-detection rule lives
 — isolated on purpose so the conflict logic can be hardened independently
 without touching the Critic's synthesis logic.
 """
+import logging
 from collections import defaultdict
 
 from app.graph.state import ReviewState, Finding
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_line_conflicts(findings: list[Finding]) -> dict[str, list[Finding]]:
@@ -49,5 +52,29 @@ async def agent_4_autofix(state: ReviewState) -> dict:
             resolved_patches.append(f)
         seen_locations.add(loc)
 
-    # TODO: post inline suggestions via GitHubClient.post_inline_suggestion
-    return {}
+    if not resolved_patches:
+        return {}
+
+    from app.services.github_client import GitHubClient
+
+    client = GitHubClient(installation_id=state.installation_id)
+    posted_count = 0
+    failed_count = 0
+
+    for finding in resolved_patches:
+        try:
+            client.post_inline_suggestion(
+                repo_full_name=state.repo_full_name,
+                pr_number=state.pr_number,
+                file_path=finding.file_path,
+                line=finding.line,
+                patch=finding.suggested_patch,
+            )
+            posted_count += 1
+        except Exception:
+            logger.exception(
+                "Failed to post inline suggestion for %s:%s", finding.file_path, finding.line
+            )
+            failed_count += 1
+
+    return {"autofix_posted": posted_count, "autofix_failed": failed_count}

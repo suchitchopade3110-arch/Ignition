@@ -18,10 +18,11 @@ const projectCache = new Map<string, Project>();
 
 const app = new Elysia()
   .post("/analyze", async ({ body, set }) => {
-    const { repo_full_name, pr_number, source } = body as {
+    const { repo_full_name, pr_number, source, base_sha } = body as {
       repo_full_name: string;
       pr_number: number;
       source: AnalyzeSource;
+      base_sha: string;
     };
 
     if (!source || (source.type !== "git" && source.type !== "zip")) {
@@ -34,6 +35,7 @@ const app = new Elysia()
         repoFullName: repo_full_name,
         prNumber: pr_number,
         source,
+        baseRef: base_sha,
         projectCache,
       });
     } catch (err) {

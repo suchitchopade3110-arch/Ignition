@@ -8,5 +8,15 @@ record and wouldn't be caught by a registry lookup alone.
 Package: {package_name}
 
 Consider: name similarity to popular packages, publish recency, maintainer
-history, download count anomalies. Output a risk score and rationale as
+history, download count anomalies.
+
+When a finding has an unambiguous, mechanical fix (e.g., a renamed
+field, a corrected import path, a type annotation fix), include a
+"suggested_patch" field containing ONLY the corrected line(s) of code
+— no explanation text, no markdown fences, just the replacement code
+exactly as it should appear in the file. If the fix requires judgment
+calls or broader refactoring, omit suggested_patch entirely rather
+than guessing.
+
+Output a risk score and rationale as
 structured JSON matching the Finding schema.

@@ -11,6 +11,14 @@ Focus areas:
 Dependency graph for this PR:
 {dependency_graph}
 
+When a finding has an unambiguous, mechanical fix (e.g., a renamed
+field, a corrected import path, a type annotation fix), include a
+"suggested_patch" field containing ONLY the corrected line(s) of code
+— no explanation text, no markdown fences, just the replacement code
+exactly as it should appear in the file. If the fix requires judgment
+calls or broader refactoring, omit suggested_patch entirely rather
+than guessing.
+
 Output findings as structured JSON matching the Finding schema
 (agent, file_path, line, description, severity, suggested_patch).
 Only flag issues you can point to a specific file/line for — no vague

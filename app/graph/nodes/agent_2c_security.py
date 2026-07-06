@@ -56,9 +56,9 @@ async def _phase2_semantic_slopsquat_check(package_name: str) -> list[Finding]:
 async def agent_2c_security(state: ReviewState) -> dict:
     findings: list[Finding] = []
 
-    # Package extraction from the diff would come from the AST payload's
-    # dependency graph in a real implementation.
-    changed_packages: list[tuple[str, str]] = []  # [(name, version), ...] — TODO: derive from state
+    changed_packages = [
+        (pkg.name, pkg.version) for pkg in state.ast_payload.changed_packages
+    ]
 
     for name, version in changed_packages:
         findings += await _phase1_deterministic_registry_check(name, version)

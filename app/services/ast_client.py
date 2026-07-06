@@ -21,10 +21,13 @@ class ASTClient:
         self._timeout = timeout
 
     async def analyze_git(
-        self, repo_full_name: str, pr_number: int, clone_url: str, ref: str
+        self, repo_full_name: str, pr_number: int, clone_url: str, ref: str, base_ref: str
     ) -> ASTAnalyzerPayload:
         return await self._post_analyze(
-            repo_full_name, pr_number, {"type": "git", "url": clone_url, "ref": ref}
+            repo_full_name,
+            pr_number,
+            {"type": "git", "url": clone_url, "ref": ref},
+            base_sha=base_ref,
         )
 
     async def analyze_zip(
@@ -34,7 +37,9 @@ class ASTClient:
             repo_full_name, pr_number, {"type": "zip", "url": zip_url}
         )
 
-    async def _post_analyze(self, repo_full_name: str, pr_number: int, source: dict) -> ASTAnalyzerPayload:
+    async def _post_analyze(
+        self, repo_full_name: str, pr_number: int, source: dict, base_sha: str = ""
+    ) -> ASTAnalyzerPayload:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 f"{self._base_url}/analyze",
@@ -42,6 +47,7 @@ class ASTClient:
                     "repo_full_name": repo_full_name,
                     "pr_number": pr_number,
                     "source": source,
+                    "base_sha": base_sha,
                 },
             )
             response.raise_for_status()

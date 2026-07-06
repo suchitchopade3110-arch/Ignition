@@ -57,6 +57,10 @@ class ReviewState(BaseModel):
     # Terminal
     final_comment_markdown: str | None = None
 
+    # Set by agent_4_autofix — informational, not used in routing decisions
+    autofix_posted: int = 0
+    autofix_failed: int = 0
+
     @classmethod
     def from_ast_payload(cls, ast_payload: ASTAnalyzerPayload, event: PullRequestWebhook) -> "ReviewState":
         return cls(

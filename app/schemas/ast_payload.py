@@ -22,6 +22,11 @@ class DependencyEdge(BaseModel):
     imported_symbols: list[str]
 
 
+class PackageRef(BaseModel):
+    name: str
+    version: str
+
+
 class ASTAnalyzerPayload(BaseModel):
     repo_full_name: str
     pr_number: int
@@ -29,3 +34,4 @@ class ASTAnalyzerPayload(BaseModel):
     symbols: list[SymbolRef]
     dependency_graph: list[DependencyEdge]
     hard_rule_violations: list[str] = []  # e.g. banned imports, blatant layer crossings
+    changed_packages: list[PackageRef] = []  # NEW

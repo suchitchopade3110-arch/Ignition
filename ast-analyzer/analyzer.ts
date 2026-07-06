@@ -17,6 +17,7 @@ interface AnalyzeArgs {
   repoFullName: string;
   prNumber: number;
   source: AnalyzeSource;
+  baseRef: string;  // NEW — needed to diff package.json against
   projectCache: Map<string, Project>;
 }
 
@@ -33,6 +34,11 @@ interface DependencyEdge {
   imported_symbols: string[];
 }
 
+interface PackageRef {
+  name: string;
+  version: string;
+}
+
 export interface ASTAnalyzerPayload {
   repo_full_name: string;
   pr_number: number;
@@ -40,6 +46,7 @@ export interface ASTAnalyzerPayload {
   symbols: SymbolRef[];
   dependency_graph: DependencyEdge[];
   hard_rule_violations: string[];
+  changed_packages: PackageRef[];  // NEW
 }
 
 const GLOB_EXTENSIONS = ["ts", "tsx", "js", "jsx"];
@@ -196,6 +203,14 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
     hardRuleViolations.push(...detectHardRuleViolations(file, relPath));
   }
 
+  // NEW — package diffing, independent of the AST symbol walk above
+  const headRef = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
+  const [basePackages, headPackages] = await Promise.all([
+    getPackageJsonAtRef(sourceDir, args.baseRef),
+    getPackageJsonAtRef(sourceDir, headRef),
+  ]);
+  const changedPackages = diffPackages(basePackages, headPackages);
+
   return {
     repo_full_name: args.repoFullName,
     pr_number: args.prNumber,
@@ -203,5 +218,60 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
     symbols,
     dependency_graph: dependencyGraph,
     hard_rule_violations: hardRuleViolations,
+    changed_packages: changedPackages, // NEW
   };
+}
+
+/**
+ * Extracts a flat name->version map from package.json at a given git ref,
+ * without checking out that ref (uses `git show` directly against the
+ * already-cloned repo's history). Returns null if the ref/file doesn't
+ * exist — a repo might not have a package.json, or the base ref might
+ * predate one being added.
+ */
+async function getPackageJsonAtRef(
+  sourceDir: string,
+  ref: string
+): Promise<Record<string, string> | null> {
+  try {
+    const proc = Bun.spawn(["git", "show", `${ref}:package.json`], {
+      cwd: sourceDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) return null;
+
+    const pkg = JSON.parse(output);
+    return { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compares two dependency maps and returns packages that are new or
+ * whose declared version changed. Doesn't attempt semver resolution —
+ * this is intentionally a simple string diff on the declared range,
+ * since Agent 2C's job is flagging what to LOOK AT, not resolving exact
+ * installed versions (that's what package-lock.json is for, and parsing
+ * that is a separate, heavier task not needed for this check).
+ */
+function diffPackages(
+  base: Record<string, string> | null,
+  head: Record<string, string> | null
+): { name: string; version: string }[] {
+  if (!head) return [];
+  const changed: { name: string; version: string }[] = [];
+
+  for (const [name, version] of Object.entries(head)) {
+    const baseVersion = base?.[name];
+    if (baseVersion !== version) {
+      // Strip leading ^ or ~ range specifiers for a cleaner version string
+      changed.push({ name, version: version.replace(/^[\^~]/, "") });
+    }
+  }
+
+  return changed;
 }

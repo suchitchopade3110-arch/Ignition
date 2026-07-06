@@ -53,6 +53,7 @@ async def run_review_stream(event: PullRequestWebhook):
         pr_number=event.pull_request.number,
         clone_url=event.repository.clone_url,
         ref=event.pull_request.head_sha,
+        base_ref=event.pull_request.base_sha,
     )
 
     initial_state = ReviewState.from_ast_payload(ast_payload, event)
