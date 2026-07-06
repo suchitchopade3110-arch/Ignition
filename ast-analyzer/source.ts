@@ -42,7 +42,12 @@ async function isGitRepo(dir: string): Promise<boolean> {
 
 async function prepareGitSource(repoKey: string, url: string, ref?: string): Promise<string> {
   const dir = workspaceDirFor(repoKey);
-  await mkdir(WORKSPACES_ROOT, { recursive: true });
+  try {
+    await mkdir(WORKSPACES_ROOT, { recursive: true });
+  } catch (e: any) {
+    if (e?.code !== "EEXIST") throw e;
+  }
+
 
   if (await isGitRepo(dir)) {
     await run(["git", "fetch", "--all", "--prune"], dir);

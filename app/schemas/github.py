@@ -21,7 +21,12 @@ class PullRequestPayload(BaseModel):
     base_sha: str
 
 
+class InstallationRef(BaseModel):
+    id: int
+
+
 class PullRequestWebhook(BaseModel):
     action: str  # "opened" | "synchronize" | "reopened" | ...
     repository: Repository
     pull_request: PullRequestPayload
+    installation: InstallationRef

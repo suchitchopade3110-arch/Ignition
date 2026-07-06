@@ -7,7 +7,7 @@
  * app/schemas/ast_payload.py:ASTAnalyzerPayload — this is the PRD-flagged
  * schema-drift risk. Prefer generating one from the other over hand-syncing.
  */
-import { Project } from "ts-morph";
+import { Project, SyntaxKind, Node } from "ts-morph";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -42,11 +42,6 @@ export interface ASTAnalyzerPayload {
   hard_rule_violations: string[];
 }
 
-// Deterministic hard-rule violations — no LLM, checked against raw source
-// text. Keep this list small and unambiguous; anything requiring judgment
-// belongs to Agent 2A/2C's semantic checks instead.
-const BANNED_PATTERNS = ["eval(", "child_process.exec("];
-
 const GLOB_EXTENSIONS = ["ts", "tsx", "js", "jsx"];
 
 function globsFor(sourceDir: string): string[] {
@@ -57,6 +52,53 @@ function globsFor(sourceDir: string): string[] {
   ];
 }
 
+/**
+ * AST-based hard-rule detection — deliberately NOT a text/substring match.
+ *
+ * A naive `sourceText.includes("eval(")` check flags any file that merely
+ * CONTAINS that string, including files that document the pattern (like
+ * this very file, or a security-linting config listing banned calls) —
+ * a real false positive discovered in production testing. Checking actual
+ * CallExpression nodes means only genuine invocations are flagged; string
+ * literals, comments, and pattern-definition arrays are structurally
+ * invisible to this check, since they're never parsed as call expressions.
+ */
+function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[number], relPath: string): string[] {
+  const violations: string[] = [];
+  const callExpressions = file.getDescendantsOfKind(SyntaxKind.CallExpression);
+
+  for (const call of callExpressions) {
+    const line = call.getStartLineNumber();
+    const expr = call.getExpression();
+
+    // Direct eval(...) call — matches only a bare identifier named "eval",
+    // not "myEval(" or a property like "obj.eval(".
+    if (Node.isIdentifier(expr) && expr.getText() === "eval") {
+      violations.push(`Direct eval() call found in ${relPath}:${line}`);
+      continue;
+    }
+
+    // child_process.exec(...) / cp.exec(...) — property access where the
+    // method name is "exec" and the object side plausibly refers to the
+    // child_process module (imported as child_process, cp, or via a
+    // require('child_process') call).
+    if (Node.isPropertyAccessExpression(expr) && expr.getName() === "exec") {
+      const objectText = expr.getExpression().getText();
+      const looksLikeChildProcess =
+        objectText === "child_process" ||
+        objectText === "cp" ||
+        objectText.includes("require('child_process')") ||
+        objectText.includes('require("child_process")');
+
+      if (looksLikeChildProcess) {
+        violations.push(`child_process.exec() call found in ${relPath}:${line}`);
+      }
+    }
+  }
+
+  return violations;
+}
+
 function getOrCreateProject(
   repoKey: string,
   sourceDir: string,
@@ -64,8 +106,6 @@ function getOrCreateProject(
 ): Project {
   const cached = cache.get(repoKey);
   if (cached) {
-    // Refresh: pick up any files added/removed since the last analysis
-    // of this repo, without discarding the warm Project/type-checker state.
     cached.addSourceFilesAtPaths(globsFor(sourceDir));
     return cached;
   }
@@ -153,12 +193,7 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
       }
     }
 
-    const text = file.getFullText();
-    for (const pattern of BANNED_PATTERNS) {
-      if (text.includes(pattern)) {
-        hardRuleViolations.push(`Banned pattern "${pattern}" found in ${relPath}`);
-      }
-    }
+    hardRuleViolations.push(...detectHardRuleViolations(file, relPath));
   }
 
   return {

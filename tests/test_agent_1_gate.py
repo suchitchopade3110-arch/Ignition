@@ -7,6 +7,7 @@ def _make_state(hard_rule_violations: list[str]) -> ReviewState:
     return ReviewState(
         repo_full_name="acme/widgets",
         pr_number=42,
+        installation_id=12345,
         ast_payload=ASTAnalyzerPayload(
             repo_full_name="acme/widgets",
             pr_number=42,

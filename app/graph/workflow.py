@@ -30,12 +30,40 @@ def pause_for_human_approval(state: ReviewState) -> dict:
 def finalize_and_post(state: ReviewState) -> dict:
     from app.services.github_client import GitHubClient
 
-    GitHubClient().post_review_comment(
+    GitHubClient(installation_id=state.installation_id).post_review_comment(
         repo_full_name=state.repo_full_name,
         pr_number=state.pr_number,
         markdown_body=state.final_comment_markdown or "No findings.",
     )
     return {}
+
+
+def route_after_gate_combined(state: ReviewState) -> list[str]:
+    """
+    Combined router for Agent 1 gate. If rejected, goes to direct_rejection.
+    Otherwise, fans out to the three parallel specialist agents.
+    """
+    decision = route_after_gate(state)
+    if decision == "direct_rejection":
+        return ["direct_rejection"]
+    return ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]
+
+
+def route_after_critic_combined(state: ReviewState) -> str:
+    """
+    Single router combining both decisions that follow the Critic:
+    1. retry vs. proceed (capped hallucination recheck loop)
+    2. pause vs. finalize (deterministic HITL gate)
+
+    Collapsed into one function because LangGraph only supports one
+    conditional router per source node — this was previously (incorrectly)
+    split across two separate add_conditional_edges calls on the critic,
+    the second of which pointed at a node ("hitl_check") that never existed.
+    """
+    retry_or_hitl = route_after_critic(state)
+    if retry_or_hitl == "retry_context_fetch":
+        return "retry_context_fetch"
+    return route_hitl(state)
 
 
 def build_graph():
@@ -55,15 +83,14 @@ def build_graph():
 
     graph.add_conditional_edges(
         "agent_1_gate",
-        route_after_gate,
+        route_after_gate_combined,
         {
             "direct_rejection": "direct_rejection",
-            "fan_out": "agent_2a_struct",  # LangGraph fans out via multiple edges below
+            "agent_2a_struct": "agent_2a_struct",
+            "agent_2b_chaos": "agent_2b_chaos",
+            "agent_2c_security": "agent_2c_security",
         },
     )
-    # Parallel fan-out: all three read the same post-gate state
-    graph.add_edge("agent_1_gate", "agent_2b_chaos")
-    graph.add_edge("agent_1_gate", "agent_2c_security")
 
     # Join at the Critic
     graph.add_edge("agent_2a_struct", "agent_3_critic")
@@ -72,19 +99,9 @@ def build_graph():
 
     graph.add_conditional_edges(
         "agent_3_critic",
-        route_after_critic,
+        route_after_critic_combined,
         {
-            "retry_context_fetch": "agent_1_gate",  # bounded by hallucination_retry_cap
-            "route_hitl": "hitl_check",
-        },
-    )
-
-    # route_hitl is a second conditional check, kept distinct from the
-    # retry-vs-continue decision above for clarity.
-    graph.add_conditional_edges(
-        "agent_3_critic",
-        route_hitl,
-        {
+            "retry_context_fetch": "agent_1_gate",
             "pause_for_human_approval": "pause_for_human_approval",
             "finalize_and_post": "agent_4_autofix",
         },

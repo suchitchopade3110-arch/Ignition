@@ -35,6 +35,7 @@ class ReviewState(BaseModel):
     # Immutable input context
     repo_full_name: str
     pr_number: int
+    installation_id: int
     ast_payload: ASTAnalyzerPayload
 
     # Written once by Agent 1
@@ -61,5 +62,6 @@ class ReviewState(BaseModel):
         return cls(
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
+            installation_id=event.installation.id,
             ast_payload=ast_payload,
         )

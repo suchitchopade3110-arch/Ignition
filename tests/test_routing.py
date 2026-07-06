@@ -7,6 +7,7 @@ def _base_state(**overrides) -> ReviewState:
     defaults = dict(
         repo_full_name="acme/widgets",
         pr_number=1,
+        installation_id=12345,
         ast_payload=ASTAnalyzerPayload(
             repo_full_name="acme/widgets",
             pr_number=1,
