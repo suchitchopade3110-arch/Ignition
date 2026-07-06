@@ -20,11 +20,11 @@ def _make_state(hard_rule_violations: list[str]) -> ReviewState:
 
 
 def test_no_violations_passes_gate():
-    result = agent_1_gate(_make_state([]))
+    result = agent_1_gate(_make_state([]), diff_fetcher=lambda s: "")
     assert result["hard_rule_violation"] is False
 
 
 def test_violation_rejects():
-    result = agent_1_gate(_make_state(["banned import: child_process"]))
+    result = agent_1_gate(_make_state(["banned import: child_process"]), diff_fetcher=lambda s: "")
     assert result["hard_rule_violation"] is True
     assert "banned import" in result["rejection_reason"]

@@ -38,7 +38,10 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
         logger.warning("VectorStore.embed() not implemented; agent_2b running without RAG context")
         similar_incidents = []
 
-    prompt = prompt_template.format(similar_incidents=json.dumps(similar_incidents))
+    prompt = prompt_template.format(
+        similar_incidents=json.dumps(similar_incidents),
+        diff=state.diff_text,
+    )
 
     try:
         raw_response = await llm.complete(prompt)

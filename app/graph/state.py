@@ -36,6 +36,7 @@ class ReviewState(BaseModel):
     repo_full_name: str
     pr_number: int
     installation_id: int
+    diff_text: str = ""
     ast_payload: ASTAnalyzerPayload
 
     # Written once by Agent 1

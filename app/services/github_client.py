@@ -42,3 +42,21 @@ class GitHubClient:
             path=file_path,
             line=line,
         )
+
+    def get_pr_diff(self, repo_full_name: str, pr_number: int) -> str:
+        """
+        Fetches the unified diff text for a PR — the actual code changes,
+        not just structural metadata. This is what gives the semantic
+        agents (2A, 2B, 2C-phase-2) real code to review instead of only
+        symbol names and import graphs.
+        """
+        repo = self._client.get_repo(repo_full_name)
+        pr = repo.get_pull(pr_number)
+        # PyGithub doesn't expose diff text directly; fetch it via the
+        # authenticated requester using the PR's diff_url-equivalent API.
+        headers, data = self._client._Github__requester.requestBlobAndCheck(
+            "GET", pr.url, headers={"Accept": "application/vnd.github.v3.diff"}
+        )
+        if isinstance(data, dict):
+            return data.get("data", "")
+        return data

@@ -22,7 +22,10 @@ async def agent_2a_struct(state: ReviewState) -> dict:
     llm = LLMClient()
 
     dependency_graph_json = [edge.model_dump() for edge in state.ast_payload.dependency_graph]
-    prompt = prompt_template.format(dependency_graph=dependency_graph_json)
+    prompt = prompt_template.format(
+        dependency_graph=dependency_graph_json,
+        diff=state.diff_text,
+    )
 
     try:
         raw_response = await llm.complete(prompt)

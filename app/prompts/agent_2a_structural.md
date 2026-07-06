@@ -3,6 +3,9 @@
 You are reviewing a pull request for architectural and structural issues only.
 Do NOT comment on security or performance — other agents own those.
 
+The actual code changes for this PR (unified diff format):
+{diff}
+
 Focus areas:
 - Domain boundary violations (layer crossings not caught by the deterministic gate)
 - API contract breaks (e.g. field renames like camelCase -> snake_case affecting consumers)
