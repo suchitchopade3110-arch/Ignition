@@ -11,6 +11,12 @@ are DELIBERATELY pure code, never LLM output — that's the whole point of
 "deterministic escalation" from the PRD. The LLM is used only to write the
 human-readable narrative on top of a verdict that's already been decided.
 If that LLM call fails, the deterministic markdown rendering still works.
+
+Every VERIFIED finding also gets recorded into the RAG store as a past
+incident — this is what feeds Agent 2B's similar_incidents() lookup on
+future PRs. Only verified findings are recorded (never raw/unverified
+ones), so the incident corpus can't be poisoned by hallucinated claims
+that were already filtered out earlier in this same function.
 """
 import logging
 from pathlib import Path
@@ -19,6 +25,7 @@ from app.graph.state import ReviewState, Finding
 from app.graph.verification.symbol_lookup import verify_symbol_exists, SymbolLookupError
 from app.graph.scoring import compute_acs, is_rule_regression
 from app.repositories.ledger import LedgerRepository
+from app.rag.vector_store import VectorStore
 from app.services.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -36,9 +43,6 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
 
     for finding in state.findings:
         try:
-            # Only checks findings that reference a specific symbol; findings
-            # that don't (e.g. a general OSV hit) pass through unverified-but-trusted,
-            # since they didn't make a codebase claim to begin with.
             if finding.description.startswith("symbol:"):
                 verify_symbol_exists(state.ast_payload, finding.file_path, finding.description)
             verified.append(finding)
@@ -82,6 +86,39 @@ async def _generate_narrative(prompt_template: str, verified_findings: list[Find
         return None
 
 
+async def _record_incidents(repo_full_name: str, verified_findings: list[Finding]) -> None:
+    """
+    Records each verified finding as a past incident for future RAG
+    retrieval by Agent 2B. Best-effort — a Supabase/embedding failure
+    here must never fail the whole Critic node, since this is a
+    forward-looking enrichment step, not part of the current review's
+    correctness.
+    """
+    if not verified_findings:
+        return
+
+    vector_store = VectorStore()
+    for finding in verified_findings:
+        try:
+            content = f"[{finding.agent}] {finding.file_path}: {finding.description}"
+            await vector_store.record_incident(
+                repo_full_name=repo_full_name,
+                content=content,
+                metadata={
+                    "severity": finding.severity,
+                    "file_path": finding.file_path,
+                    "line": finding.line,
+                    "agent": finding.agent,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record incident for %s:%s — continuing with remaining findings",
+                finding.file_path,
+                finding.line,
+            )
+
+
 async def agent_3_critic(state: ReviewState) -> dict:
     verified_findings, hallucinated_count = _verify_findings(state)
 
@@ -102,6 +139,12 @@ async def agent_3_critic(state: ReviewState) -> dict:
 
     prompt_template = PROMPT_PATH.read_text()
     narrative = await _generate_narrative(prompt_template, verified_findings)
+
+    # Record incidents only on a genuinely final pass — not on a retry
+    # loop iteration, since should_retry means this run's findings haven't
+    # been fully trusted yet and shouldn't be written into history early.
+    if not should_retry:
+        await _record_incidents(state.repo_full_name, verified_findings)
 
     return {
         "verified_findings": verified_findings,

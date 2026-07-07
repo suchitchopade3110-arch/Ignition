@@ -26,16 +26,16 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
     vector_store = VectorStore()
     llm = LLMClient()
 
-    # Semantic context only — informs reasoning, is not treated as verified fact.
     try:
         similar_incidents = await vector_store.similar_incidents(
             repo_full_name=state.repo_full_name,
             query_text="N+1 query patterns and edge-case handling in this diff",
         )
-    except NotImplementedError:
-        # Embedding model not yet wired up — proceed without historical
-        # context rather than blocking this agent entirely.
-        logger.warning("VectorStore.embed() not implemented; agent_2b running without RAG context")
+    except Exception:
+        # Embedding/Supabase call failing shouldn't block this agent
+        # entirely — proceed without historical context rather than
+        # crashing the whole sub-graph.
+        logger.exception("Failed to retrieve similar incidents; proceeding without RAG context")
         similar_incidents = []
 
     prompt = prompt_template.format(
