@@ -16,15 +16,15 @@ export default function LoginPage() {
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10 flex flex-col items-center">
         <Image 
-          src="/logo.svg" 
+          src="/logo-full.png" 
           alt="Ignition Logo" 
-          width={180} 
-          height={180} 
-          className="object-contain"
+          width={280} 
+          height={280} 
+          className="object-contain scale-110 -mb-6"
           priority
         />
-        <h2 className="mt-2 text-center text-3xl font-bold tracking-tight text-foreground">
-          Ignition
+        <h2 className="mt-2 text-center text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">
+          IGNITION
         </h2>
         <p className="mt-2 text-center text-sm text-muted-foreground">
           Autonomous Multi-Agent AI Code Review Platform
@@ -63,7 +63,7 @@ export default function LoginPage() {
                 disabled
                 className="w-full flex justify-center py-2.5 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-primary-foreground bg-primary/80 hover:bg-primary cursor-not-allowed opacity-50 transition-colors"
               >
-                Sign in with SAML
+                Sign in with HITL
               </button>
             </div>
           </div>

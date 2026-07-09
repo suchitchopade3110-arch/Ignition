@@ -4,7 +4,6 @@ import { HeroSection } from "@/components/landing/hero-section"
 import { ArchitectureSection } from "@/components/landing/architecture-section"
 import { FeatureGrid } from "@/components/landing/feature-grid"
 import { LiveDemo } from "@/components/landing/live-demo"
-import { DashboardShowcase } from "@/components/landing/dashboard-showcase"
 import { TechStack } from "@/components/landing/tech-stack"
 import { MetricsSection } from "@/components/landing/metrics"
 import { FaqSection } from "@/components/landing/faq-section"
@@ -32,8 +31,6 @@ export default function LandingPage() {
         <FeatureGrid />
         
         <LiveDemo />
-        
-        <DashboardShowcase />
         
         <TechStack />
         

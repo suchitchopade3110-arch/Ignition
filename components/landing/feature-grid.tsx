@@ -38,13 +38,13 @@ const features = [
     title: "Architecture Score",
     description: "Tracks the long-term health and technical debt of your repositories.",
     icon: BarChart3,
-    colSpan: "md:col-span-2",
+    colSpan: "md:col-span-1",
   },
   {
     title: "Deterministic Validation",
     description: "No hallucinated review comments. Every finding is backed by static analysis and verifiable context.",
     icon: Fingerprint,
-    colSpan: "md:col-span-2",
+    colSpan: "md:col-span-1",
   },
   {
     title: "Auto Fix Suggestions",

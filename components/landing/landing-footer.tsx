@@ -7,11 +7,11 @@ export function LandingFooter() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           <div className="md:col-span-1">
-            <Link href="/" className="flex items-center gap-2 mb-4">
-              <div className="relative h-8 w-8">
-                <Image src="/logo.svg" alt="Ignition" fill className="object-contain" />
+            <Link href="/loading" className="flex items-center mb-4">
+              <div className="relative h-14 w-24">
+                <Image src="/logo-full.png" alt="Ignition" fill className="object-contain scale-[2]" />
               </div>
-              <span className="text-xl font-bold tracking-tight text-foreground">Ignition</span>
+              <span className="text-xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-primary to-blue-400">IGNITION</span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed">
               The deterministic multi-agent AI code review platform for modern enterprise engineering teams.
