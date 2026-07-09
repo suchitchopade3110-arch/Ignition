@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <linearGradient id="fire-gradient" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#FFC107" />
+      <stop offset="30%" stop-color="#FF9800" />
+      <stop offset="70%" stop-color="#FF5722" />
+      <stop offset="100%" stop-color="#D84315" />
+    </linearGradient>
+    <linearGradient id="inner-fire" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#FFF59D" />
+      <stop offset="50%" stop-color="#FFCA28" />
+      <stop offset="100%" stop-color="#FF8F00" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Outer Flame -->
+  <path d="M100 20 C100 20 40 80 40 130 C40 163.137 66.863 190 100 190 C133.137 190 160 163.137 160 130 C160 80 100 20 100 20 Z" fill="url(#fire-gradient)" />
+  
+  <!-- Side Flames -->
+  <path d="M40 130 C40 110 50 90 65 75 C55 95 60 120 75 135 C75 145 65 155 50 155 C45 155 40 145 40 130 Z" fill="#FF5722" />
+  <path d="M160 130 C160 110 150 90 135 75 C145 95 140 120 125 135 C125 145 135 155 150 155 C155 155 160 145 160 130 Z" fill="#FF5722" />
+
+  <!-- Inner Flame -->
+  <path d="M100 60 C100 60 70 100 70 135 C70 151.569 83.431 165 100 165 C116.569 165 130 151.569 130 135 C130 100 100 60 100 60 Z" fill="url(#inner-fire)" />
+
+  <!-- Circuit Pattern (Cyan) with Glow -->
+  <g stroke="#00E5FF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)">
+    <!-- Main Center Stem -->
+    <path d="M100 190 L100 120" />
+    <path d="M100 120 L85 105 L85 85 L100 70" />
+    <path d="M100 120 L115 105 L115 85" />
+    
+    <!-- Left Branch -->
+    <path d="M100 160 L75 160 L60 145 L60 125" />
+    <path d="M60 145 L45 145 L35 135" />
+    
+    <!-- Right Branch -->
+    <path d="M100 150 L120 150 L135 135 L135 115" />
+    <path d="M135 135 L150 135 L165 120" />
+  </g>
+
+  <!-- Circuit Nodes (Cyan) -->
+  <g fill="#00E5FF" filter="url(#glow)">
+    <circle cx="100" cy="70" r="4.5" />
+    <circle cx="85" cy="85" r="4.5" />
+    <circle cx="115" cy="85" r="4.5" />
+    
+    <circle cx="60" cy="125" r="4.5" />
+    <circle cx="35" cy="135" r="4.5" />
+    
+    <circle cx="135" cy="115" r="4.5" />
+    <circle cx="165" cy="120" r="4.5" />
+  </g>
+</svg>
