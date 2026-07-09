@@ -15,7 +15,7 @@ class ApiClient {
     const url = `${API_BASE_URL}${endpoint}`
     
     // Fallback to mock data for Phase 3 demo purposes if no real backend
-    if (process.env.NODE_ENV !== "test") {
+    if (!process.env.NEXT_PUBLIC_API_URL) {
       if (typeof window !== "undefined") {
         await new Promise(resolve => setTimeout(resolve, 500)) // Simulate network latency
       }

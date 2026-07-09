@@ -22,5 +22,7 @@ exactly as it should appear in the file. If the fix requires judgment
 calls or broader refactoring, omit suggested_patch entirely rather
 than guessing.
 
-Output findings as structured JSON matching the Finding schema
-(agent, file_path, line, description, severity, suggested_patch).
+Output findings as a JSON object with a single key "findings" 
+containing a list of objects matching the Finding schema. If there 
+are no findings, output exactly {{"findings": []}} — never output a 
+bare JSON array on its own.

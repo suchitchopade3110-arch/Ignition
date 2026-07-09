@@ -28,11 +28,17 @@ def parse_findings_json(raw: str, agent_name: str) -> list[Finding]:
     findings: list[Finding] = []
     for item in items:
         try:
+            file_path = item.get("file_path") or item.get("file")
+            if not file_path:
+                raise KeyError("file_path/file")
+            line = item.get("line") or item.get("line_number")
+            if line is not None:
+                line = int(line)
             findings.append(
                 Finding(
                     agent=agent_name,
-                    file_path=item["file_path"],
-                    line=item.get("line"),
+                    file_path=file_path,
+                    line=line,
                     description=item["description"],
                     severity=item.get("severity", "low"),
                     suggested_patch=item.get("suggested_patch"),

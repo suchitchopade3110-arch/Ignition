@@ -13,13 +13,22 @@ class Repository(BaseModel):
     default_branch: str
     clone_url: str  # public HTTPS git URL — what the AST analyzer clones from
 
+class CommitRef(BaseModel):
+    sha: str
 
 class PullRequestPayload(BaseModel):
     number: int
     diff_url: str
-    head_sha: str
-    base_sha: str
+    head: CommitRef
+    base: CommitRef
 
+    @property
+    def head_sha(self):
+        return self.head.sha
+
+    @property
+    def base_sha(self):
+        return self.base.sha
 
 class InstallationRef(BaseModel):
     id: int

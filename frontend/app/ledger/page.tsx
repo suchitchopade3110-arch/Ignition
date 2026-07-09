@@ -14,7 +14,7 @@ export default function LedgerPage() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [repos, setRepos] = useState<Repository[]>([])
-  const [selectedRepo, setSelectedRepo] = useState<string>("core-banking-api")
+  const [selectedRepo, setSelectedRepo] = useState<string>("")
   const [stats, setStats] = useState<LedgerStats | null>(null)
   const [trend, setTrend] = useState<LedgerTrend[]>([])
 
@@ -24,7 +24,7 @@ export default function LedgerPage() {
         const repoData = await apiClient.getRepositories()
         setRepos(repoData)
         if (repoData.length > 0 && !selectedRepo) {
-          setSelectedRepo(repoData[0].name)
+          setSelectedRepo(`${repoData[0].owner}/${repoData[0].name}`)
         }
       } catch {
         toast({ title: "Error", description: "Failed to load repositories", type: "error" })
@@ -89,7 +89,7 @@ export default function LedgerPage() {
             className="appearance-none w-full sm:w-64 bg-card border border-border text-foreground text-sm rounded-lg focus:ring-primary focus:border-primary block p-2.5 pr-8 transition-colors hover:border-border/80 outline-none"
           >
             {repos.map(r => (
-              <option key={r.id} value={r.name}>{r.name}</option>
+              <option key={r.id} value={`${r.owner}/${r.name}`}>{r.name}</option>
             ))}
           </select>
           <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
