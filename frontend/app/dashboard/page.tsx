@@ -58,25 +58,25 @@ export default async function DashboardPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Reviews */}
-        <div className="rounded-xl border border-border bg-card shadow-sm flex flex-col">
-          <div className="px-6 py-5 border-b border-border">
-            <h3 className="text-base font-semibold text-foreground">Recent Reviews</h3>
+        <div className="border border-border bg-card/20 rounded-xl overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b border-border bg-card/45 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">Recent Reviews</h3>
           </div>
-          <div className="flex-1 p-0 overflow-auto">
+          <div className="flex-1 overflow-auto">
             <ul className="divide-y divide-border">
-              {reviews.slice(0, 4).map((review) => (
-                <li key={review.id} className="p-6 hover:bg-secondary/30 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col gap-1">
+              {reviews.slice(0, 5).map((review) => (
+                <li key={review.id} className="px-4 py-3 hover:bg-secondary/35 transition-colors">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex flex-col gap-0.5 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-foreground">{review.repoName}</span>
-                        <span className="text-xs text-muted-foreground">#{review.pullRequestNumber}</span>
+                        <span className="text-sm font-medium text-foreground truncate">{review.repoName}</span>
+                        <span className="text-[10px] font-mono text-muted-foreground">#{review.pullRequestNumber}</span>
                       </div>
-                      <p className="text-sm text-muted-foreground line-clamp-1">{review.title}</p>
+                      <p className="text-xs text-muted-foreground truncate">{review.title}</p>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 shrink-0">
                       <SeverityBadge level={review.severity} />
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {new Date(review.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -90,21 +90,21 @@ export default async function DashboardPage() {
         </div>
 
         {/* Repository Health */}
-        <div className="rounded-xl border border-border bg-card shadow-sm flex flex-col">
-          <div className="px-6 py-5 border-b border-border">
-            <h3 className="text-base font-semibold text-foreground">Repository Health (ACS)</h3>
+        <div className="border border-border bg-card/20 rounded-xl overflow-hidden flex flex-col">
+          <div className="px-4 py-3 border-b border-border bg-card/45 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-foreground">Repository Health (ACS)</h3>
           </div>
-          <div className="flex-1 p-0 overflow-auto">
+          <div className="flex-1 overflow-auto">
             <ul className="divide-y divide-border">
-              {repos.slice(0, 4).map((repo) => (
-                <li key={repo.id} className="p-6 hover:bg-secondary/30 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex flex-col gap-1">
+              {repos.slice(0, 5).map((repo) => (
+                <li key={repo.id} className="px-4 py-3 hover:bg-secondary/35 transition-colors">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-medium text-foreground">{repo.name}</span>
                       <span className="text-xs text-muted-foreground">{repo.owner}</span>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <AcsScoreRing score={repo.acsScore} size={40} strokeWidth={3} />
+                    <div className="flex items-center gap-4 shrink-0">
+                      <AcsScoreRing score={repo.acsScore} size={36} strokeWidth={3} />
                     </div>
                   </div>
                 </li>
