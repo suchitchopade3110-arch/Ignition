@@ -7,7 +7,7 @@ export const mockReviewDetail: ReviewDetail = {
   pullRequestNumber: 432,
   title: "feat: Implement SEPA transfers",
   status: "running",
-  severity: "danger",
+  severity: "critical",
   findingsCount: 3,
   createdAt: new Date().toISOString(),
   acsScore: 92,
@@ -79,7 +79,7 @@ export const mockReviewDetail: ReviewDetail = {
     {
       id: "find-1",
       agentId: "agent-2a",
-      severity: "warning",
+      severity: "medium",
       file: "src/services/sepa/client.go",
       line: 45,
       description: "Direct HTTP call to external service without circuit breaker.",
@@ -90,7 +90,7 @@ export const mockReviewDetail: ReviewDetail = {
     {
       id: "find-2",
       agentId: "agent-2b",
-      severity: "danger",
+      severity: "critical",
       file: "src/db/migrations/20260709_sepa.sql",
       line: 12,
       description: "Adding a non-null column without a default value will lock the table.",

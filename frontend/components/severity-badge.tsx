@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import { AlertCircle, AlertTriangle, Info, CheckCircle2, Shield, LucideIcon } from "lucide-react"
+import { AlertCircle, AlertTriangle, Info, Shield, LucideIcon } from "lucide-react"
 import { SeverityLevel } from "@/lib/types"
 
 interface SeverityBadgeProps {
@@ -8,11 +8,6 @@ interface SeverityBadgeProps {
 }
 
 const config: Record<SeverityLevel, { label: string, styles: string, icon: LucideIcon }> = {
-  info: {
-    label: "Info",
-    styles: "bg-blue-500/10 text-blue-500 border-blue-500/20",
-    icon: Info
-  },
   none: {
     label: "None",
     styles: "bg-secondary text-muted-foreground border-border",
@@ -20,16 +15,11 @@ const config: Record<SeverityLevel, { label: string, styles: string, icon: Lucid
   },
   low: {
     label: "Low",
-    styles: "bg-blue-500/10 text-blue-500 border-blue-500/20",
+    styles: "bg-info/10 text-info border-info/20",
     icon: Info
   },
   medium: {
     label: "Medium",
-    styles: "bg-warning/10 text-warning border-warning/20",
-    icon: AlertTriangle
-  },
-  warning: {
-    label: "Warning",
     styles: "bg-warning/10 text-warning border-warning/20",
     icon: AlertTriangle
   },
@@ -38,25 +28,16 @@ const config: Record<SeverityLevel, { label: string, styles: string, icon: Lucid
     styles: "bg-danger/10 text-danger border-danger/20",
     icon: AlertCircle
   },
-  danger: {
-    label: "Danger",
-    styles: "bg-danger/10 text-danger border-danger/20",
-    icon: AlertCircle
-  },
   critical: {
     label: "Critical",
     styles: "bg-critical/10 text-critical border-critical/20",
     icon: AlertCircle
-  },
-  success: {
-    label: "Passed",
-    styles: "bg-success/10 text-success border-success/20",
-    icon: CheckCircle2
   }
 }
 
 export function SeverityBadge({ level, className }: SeverityBadgeProps) {
-  const { label, styles, icon: Icon } = config[level] || config.info
+  const badgeConfig = config[level] || config.none
+  const { label, styles, icon: Icon } = badgeConfig
 
   return (
     <span

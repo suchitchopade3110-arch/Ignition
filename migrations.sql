@@ -3,7 +3,7 @@
 
 -- Custom enums for validation
 CREATE TYPE review_status AS ENUM ('queued', 'running', 'paused', 'waiting_hitl', 'completed', 'failed', 'cancelled');
-CREATE TYPE severity_level AS ENUM ('none', 'low', 'medium', 'high', 'critical', 'info', 'warning', 'danger', 'success');
+CREATE TYPE severity_level AS ENUM ('none', 'low', 'medium', 'high', 'critical');
 
 -- Create repositories table
 CREATE TABLE repositories (

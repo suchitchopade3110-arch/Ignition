@@ -1,4 +1,4 @@
-export type SeverityLevel = "info" | "warning" | "danger" | "critical" | "success" | "none" | "low" | "medium" | "high"
+export type SeverityLevel = "none" | "low" | "medium" | "high" | "critical"
 export type ReviewStatusType = "queued" | "running" | "paused" | "waiting_hitl" | "completed" | "failed" | "cancelled"
 
 export interface Repository {
