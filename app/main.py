@@ -555,8 +555,9 @@ async def get_repo_settings(repo_id: str):
 
 
 @api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings)
-async def update_repo_settings(repo_id: str, settings_update: dict):
-    return RepositorySettings(**repo_repo.update_settings(repo_id, settings_update))
+async def update_repo_settings(repo_id: str, settings_update: RepositorySettings):
+    settings_dict = settings_update.model_dump()
+    return RepositorySettings(**repo_repo.update_settings(repo_id, settings_dict))
 
 
 @api_router.get("/reviews", response_model=list[Review])
