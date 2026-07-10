@@ -1,0 +1,227 @@
+{
+  "/stats": {
+    "activeReviews": 0,
+    "hitlPending": 1,
+    "avgAcsScore": 74.2,
+    "issuesFound": 10
+  },
+  "/repos": [
+    {
+      "id": "testowner_testrepo",
+      "name": "testrepo",
+      "owner": "testowner",
+      "lastReviewDate": "2026-07-09T14:21:43.628494+00:00",
+      "acsScore": 40.0,
+      "status": "critical",
+      "language": "TypeScript"
+    }
+  ],
+  "/repos/{id}/settings": {
+    "enableAiReview": true,
+    "enableAutoFix": true,
+    "enableHitl": true,
+    "securityScan": true,
+    "architectureScan": true,
+    "logicScan": true
+  },
+  "/reviews": [
+    {
+      "id": "378c804c-d559-46cc-874f-ab2689d34b58",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 103,
+      "title": "Bad PR",
+      "status": "completed",
+      "severity": "none",
+      "findingsCount": 5,
+      "createdAt": "2026-07-09T14:21:43.628494+00:00",
+      "completedAt": "2026-07-09T14:21:43.775146+00:00",
+      "duration": "0s",
+      "acsScore": 40.0
+    },
+    {
+      "id": "4f4b70f4-ac84-49c1-9bb9-b28235e158c9",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 102,
+      "title": "Add feature",
+      "status": "waiting_hitl",
+      "severity": "high",
+      "findingsCount": 2,
+      "createdAt": "2026-07-09T14:21:43.316583+00:00",
+      "completedAt": null,
+      "duration": null,
+      "acsScore": null
+    },
+    {
+      "id": "0436e658-b76d-4bc8-a941-fc4a35dd80e8",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 101,
+      "title": "Fix bug",
+      "status": "completed",
+      "severity": "none",
+      "findingsCount": 0,
+      "createdAt": "2026-07-09T14:21:42.635398+00:00",
+      "completedAt": "2026-07-09T14:21:42.950106+00:00",
+      "duration": "0s",
+      "acsScore": 95.0
+    },
+    {
+      "id": "73d2a4c1-893d-4ed4-ac93-a1fc6ec86d0a",
+      "repoId": "suchitchopade3110-arch_Ignition",
+      "repoName": "Ignition",
+      "pullRequestNumber": 42,
+      "title": "Test PR for integration check",
+      "status": "completed",
+      "severity": "medium",
+      "findingsCount": 3,
+      "createdAt": "2026-07-09T10:29:56.090785+00:00",
+      "completedAt": null,
+      "duration": null,
+      "acsScore": 87.5
+    }
+  ],
+  "/repos/{repo}/reviews": [
+    {
+      "id": "378c804c-d559-46cc-874f-ab2689d34b58",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 103,
+      "title": "Bad PR",
+      "status": "completed",
+      "severity": "none",
+      "findingsCount": 5,
+      "createdAt": "2026-07-09T14:21:43.628494+00:00",
+      "completedAt": "2026-07-09T14:21:43.775146+00:00",
+      "duration": "0s",
+      "acsScore": 40.0
+    },
+    {
+      "id": "4f4b70f4-ac84-49c1-9bb9-b28235e158c9",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 102,
+      "title": "Add feature",
+      "status": "waiting_hitl",
+      "severity": "high",
+      "findingsCount": 2,
+      "createdAt": "2026-07-09T14:21:43.316583+00:00",
+      "completedAt": null,
+      "duration": null,
+      "acsScore": null
+    },
+    {
+      "id": "0436e658-b76d-4bc8-a941-fc4a35dd80e8",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 101,
+      "title": "Fix bug",
+      "status": "completed",
+      "severity": "none",
+      "findingsCount": 0,
+      "createdAt": "2026-07-09T14:21:42.635398+00:00",
+      "completedAt": "2026-07-09T14:21:42.950106+00:00",
+      "duration": "0s",
+      "acsScore": 95.0
+    }
+  ],
+  "/reviews/{id}": {
+    "id": "4f4b70f4-ac84-49c1-9bb9-b28235e158c9",
+    "repoId": "testowner_testrepo",
+    "repoName": "testrepo",
+    "pullRequestNumber": 102,
+    "title": "Add feature",
+    "status": "waiting_hitl",
+    "severity": "high",
+    "findingsCount": 2,
+    "createdAt": "2026-07-09T14:21:43.316583+00:00",
+    "completedAt": null,
+    "duration": null,
+    "acsScore": null,
+    "author": "bob",
+    "branch": "feature",
+    "commitSha": "123456",
+    "filesChanged": 0,
+    "linesAdded": 0,
+    "linesDeleted": 0,
+    "previousAcsScore": 100.0,
+    "regression": {
+      "isRegression": false,
+      "ruleRegressed": null,
+      "previousScore": null,
+      "currentScore": null,
+      "impact": null,
+      "recommendation": null
+    },
+    "agents": [],
+    "findings": [],
+    "diffs": [],
+    "githubCommentPreview": null
+  },
+  "/hitl/pending": [
+    {
+      "id": "4f4b70f4-ac84-49c1-9bb9-b28235e158c9",
+      "repoId": "testowner_testrepo",
+      "repoName": "testrepo",
+      "pullRequestNumber": 102,
+      "title": "Add feature",
+      "status": "waiting_hitl",
+      "severity": "high",
+      "findingsCount": 2,
+      "createdAt": "2026-07-09T14:21:43.316583+00:00",
+      "completedAt": null,
+      "duration": null,
+      "acsScore": null,
+      "author": "bob",
+      "branch": "feature",
+      "commitSha": "123456",
+      "filesChanged": 0,
+      "linesAdded": 0,
+      "linesDeleted": 0,
+      "previousAcsScore": 100.0,
+      "regression": {
+        "isRegression": false,
+        "ruleRegressed": null,
+        "previousScore": null,
+        "currentScore": null,
+        "impact": null,
+        "recommendation": null
+      },
+      "agents": [],
+      "findings": [],
+      "diffs": [],
+      "githubCommentPreview": null,
+      "waitingSince": "2026-07-09T14:21:43.316583+00:00"
+    }
+  ],
+  "/ledger/{repo}": {
+    "averageAcs": 67.5,
+    "totalReviews": 3,
+    "criticalFindings": 0,
+    "activeRegressions": 1
+  },
+  "/ledger/{repo}/trend": [
+    {
+      "date": "2026-07",
+      "acsScore": 67.5,
+      "reviewsCount": 3,
+      "criticalCount": 0
+    }
+  ],
+  "/auth/me": {
+    "id": "user-1",
+    "name": "Demo User"
+  },
+  "/repos/{id}/settings PATCH": {
+    "enableAiReview": true,
+    "enableAutoFix": true,
+    "enableHitl": true,
+    "securityScan": true,
+    "architectureScan": true,
+    "logicScan": true
+  },
+  "/hitl/{id}/approve": {
+    "success": true
+  }
+}
