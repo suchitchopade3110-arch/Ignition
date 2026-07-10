@@ -16,47 +16,51 @@ export function LiveReviewStream({ initialData }: { initialData: ReviewDetail })
   }, {} as Record<string, typeof findings>)
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-10">
       {/* Connection Indicator */}
-      {connectionState === "open" && (
-        <div className="flex items-center gap-2 text-xs font-medium text-primary bg-primary/10 w-fit px-3 py-1 rounded-full border border-primary/20">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
-          </span>
-          Live SSE Stream Active
-        </div>
-      )}
-      {connectionState === "connecting" && (
-        <div className="flex items-center gap-2 text-xs font-medium text-warning bg-warning/10 w-fit px-3 py-1 rounded-full border border-warning/20">
-          <span className="h-3 w-3 rounded-full border-2 border-warning border-t-transparent animate-spin" />
-          Connecting to Stream...
-        </div>
-      )}
-      {connectionState === "error" && (
-        <div className="flex items-center gap-2 text-xs font-medium text-critical bg-critical/10 w-fit px-3 py-1 rounded-full border border-critical/20">
-          <span className="h-2 w-2 rounded-full bg-critical" />
-          {error?.message || "Connection Error"}
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        {connectionState === "open" && (
+          <div className="flex items-center gap-2 text-xs font-semibold text-[#E85D2F] bg-[#E85D2F]/10 w-fit px-3 py-1.5 rounded-lg border border-[#E85D2F]/30 font-mono shadow-[0_0_12px_rgba(232,93,47,0.1)]">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#E85D2F] opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#E85D2F]"></span>
+            </span>
+            STREAMING LIVE UPDATE
+          </div>
+        )}
+        {connectionState === "connecting" && (
+          <div className="flex items-center gap-2 text-xs font-semibold text-warning bg-warning/10 w-fit px-3 py-1.5 rounded-lg border border-warning/35 font-mono">
+            <span className="h-3.5 w-3.5 rounded-full border-2 border-warning border-t-transparent animate-spin" />
+            CONNECTING PIPELINE...
+          </div>
+        )}
+        {connectionState === "error" && (
+          <div className="flex items-center gap-2 text-xs font-semibold text-critical bg-critical/10 w-fit px-3 py-1.5 rounded-lg border border-critical/35 font-mono">
+            <span className="h-2.5 w-2.5 rounded-full bg-critical" />
+            {error?.message || "DISCONNECTED"}
+          </div>
+        )}
+      </div>
 
-      {/* Agent Timeline */}
-      <section>
-        <h2 className="text-lg font-semibold text-foreground mb-6">Agent Progress</h2>
+      {/* Agent Progress */}
+      <section className="bg-[#14171A] p-6 rounded-xl border border-[#22262B] shadow-lg shadow-black/25">
+        <h2 className="text-sm font-bold text-foreground uppercase tracking-wider mb-6 border-b border-[#22262B] pb-3">Agent Progress Timeline</h2>
         <AgentTimeline agents={agents} />
       </section>
 
       {/* Findings */}
       {findings.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold text-foreground mb-6">Detected Findings</h2>
+        <section className="space-y-6">
+          <h2 className="text-sm font-bold text-foreground uppercase tracking-wider border-b border-[#22262B] pb-3">Detected Findings</h2>
           <div className="space-y-8">
             {Object.entries(groupedFindings).map(([agentId, agentFindings]) => {
               const agentName = agents.find(a => a.id === agentId)?.name || agentId
               return (
                 <div key={agentId} className="space-y-4">
-                  <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{agentName}</h3>
-                  <div className="space-y-3">
+                  <h3 className="text-xs font-bold text-muted-foreground uppercase tracking-wider font-mono bg-[#14171A] w-fit px-2.5 py-1 rounded border border-[#22262B]">
+                    {agentName}
+                  </h3>
+                  <div className="space-y-3 pl-2 border-l border-[#22262B]">
                     {agentFindings.map(finding => (
                       <FindingCard key={finding.id} finding={finding} />
                     ))}
