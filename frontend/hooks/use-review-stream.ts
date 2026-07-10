@@ -11,7 +11,7 @@ interface StreamState {
   error: Error | null
 }
 
-export function useReviewStream(reviewId: string, initialData: any) {
+export function useReviewStream(reviewId: string, initialData?: { status?: ReviewStatusType; agents?: AgentProgress[]; findings?: Finding[] }) {
   const [state, setState] = useState<StreamState>({
     status: initialData?.status || "queued",
     agents: initialData?.agents || [],
@@ -52,7 +52,7 @@ export function useReviewStream(reviewId: string, initialData: any) {
         reconnectAttempts = 0
       }
 
-      es.onerror = (err) => {
+      es.onerror = () => {
         es.close()
         eventSourceRef.current = null
         
@@ -74,7 +74,7 @@ export function useReviewStream(reviewId: string, initialData: any) {
       }
 
       // Handle real SSE events
-      es.addEventListener("review.started", (e) => {
+      es.addEventListener("review.started", () => {
         setState(s => ({ ...s, status: "running" }))
       })
 
@@ -136,6 +136,7 @@ export function useReviewStream(reviewId: string, initialData: any) {
         clearTimeout(reconnectTimeoutRef.current)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewId]) // Deliberately omitted state.status from dep array to avoid thrashing connection
 
   return state

@@ -10,32 +10,38 @@ interface AgentTimelineProps {
 }
 
 const statusConfig = {
-  pending: { icon: Clock, className: "text-muted-foreground", bg: "bg-secondary" },
-  running: { icon: Loader2, className: "text-primary animate-spin", bg: "bg-primary/20" },
-  completed: { icon: CheckCircle2, className: "text-success", bg: "bg-success/20" },
-  failed: { icon: XCircle, className: "text-critical", bg: "bg-critical/20" },
+  pending: { icon: Clock, className: "text-[#4A5056]", bg: "bg-[#14171A] border-[#22262B]" },
+  running: { icon: Loader2, className: "text-[#E85D2F] animate-spin", bg: "bg-[#E85D2F]/10 border-[#E85D2F]/30 shadow-[0_0_12px_rgba(232,93,47,0.15)]" },
+  completed: { icon: CheckCircle2, className: "text-success", bg: "bg-success/10 border-success/35" },
+  failed: { icon: XCircle, className: "text-critical", bg: "bg-critical/10 border-critical/35" },
 }
 
 function AgentNode({ agent, isParallel = false }: { agent: AgentProgress; isParallel?: boolean }) {
   const { icon: Icon, className, bg } = statusConfig[agent.status]
 
   return (
-    <div className={cn("flex items-center gap-4 p-4 rounded-xl border border-border bg-card relative z-10", isParallel && "flex-1")}>
-      <div className={cn("flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full", bg)}>
+    <div className={cn(
+      "flex items-center gap-4 p-4 rounded-xl border bg-[#14171A] relative z-10 transition-all duration-300",
+      agent.status === "running" ? "border-[#E85D2F]/40" : "border-[#22262B]",
+      isParallel && "flex-1"
+    )}>
+      <div className={cn("shrink-0 flex items-center justify-center h-10 w-10 rounded-full border", bg)}>
         <Icon className={cn("h-5 w-5", className)} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-foreground truncate">{agent.name}</p>
+        <p className="text-sm font-semibold text-foreground truncate">{agent.name}</p>
         <div className="flex items-center gap-2 mt-1">
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground font-mono">
             {agent.status === "completed" || agent.status === "failed" 
-              ? `${(agent.executionTimeMs || 0) / 1000}s` 
-              : agent.status === "running" ? "Running..." : "Waiting"}
+              ? `${((agent.executionTimeMs || 0) / 1000).toFixed(2)}s` 
+              : agent.status === "running" ? "Analyzing..." : "Pending"}
           </span>
           {agent.findingCount > 0 && (
             <>
-              <span className="text-muted-foreground text-xs">•</span>
-              <span className="text-xs font-medium text-warning">{agent.findingCount} finding{agent.findingCount !== 1 ? 's' : ''}</span>
+              <span className="text-[#22262B] text-xs">•</span>
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold font-mono bg-warning/15 text-warning border border-warning/20">
+                {agent.findingCount} FINDING{agent.findingCount !== 1 ? 's' : ''}
+              </span>
             </>
           )}
         </div>
@@ -58,7 +64,7 @@ export function AgentTimeline({ agents }: AgentTimelineProps) {
 
   return (
     <div className="relative py-4">
-      <div className="absolute top-0 bottom-0 left-[3rem] w-0.5 bg-border -z-0" />
+      <div className="absolute top-0 bottom-0 left-12 w-0.5 bg-border z-0" />
       
       <div className="space-y-8 relative z-10">
         {/* Start Nodes */}
@@ -82,14 +88,14 @@ export function AgentTimeline({ agents }: AgentTimelineProps) {
             transition={{ delay: 0.3 }}
           >
             {/* Desktop branch lines */}
-            <div className="hidden md:block absolute -top-8 left-[3rem] right-[3rem] h-8 border-t-2 border-l-2 border-r-2 border-border rounded-t-xl" />
+            <div className="hidden md:block absolute -top-8 left-12 right-12 h-8 border-t-2 border-l-2 border-r-2 border-border rounded-t-xl" />
             
             {parallelMiddle.map((agent) => (
               <AgentNode key={agent.id} agent={agent} isParallel />
             ))}
 
             {/* Desktop converge lines */}
-            <div className="hidden md:block absolute -bottom-8 left-[3rem] right-[3rem] h-8 border-b-2 border-l-2 border-r-2 border-border rounded-b-xl" />
+            <div className="hidden md:block absolute -bottom-8 left-12 right-12 h-8 border-b-2 border-l-2 border-r-2 border-border rounded-b-xl" />
           </motion.div>
         )}
 

@@ -18,5 +18,7 @@ exactly as it should appear in the file. If the fix requires judgment
 calls or broader refactoring, omit suggested_patch entirely rather
 than guessing.
 
-Output a risk score and rationale as
-structured JSON matching the Finding schema.
+Output findings as a JSON object with a single key "findings" 
+containing a list of objects matching the Finding schema. If there 
+are no findings, output exactly {{"findings": []}} — never output a 
+bare JSON array on its own.

@@ -24,6 +24,8 @@
   --color-success: #10B981;
   --color-warning: #F59E0B;
   --color-critical: #DC2626;
+  --color-danger: #EF4444;
+  --color-info: #3B82F6;
 
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);

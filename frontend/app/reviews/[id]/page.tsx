@@ -30,27 +30,27 @@ export default async function ReviewDetailPage(props: { params: Promise<{ id: st
   return (
     <AppShell>
       {/* Header */}
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-start md:justify-between border-b border-[#22262B] pb-6">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-foreground">{review.title}</h1>
             <StatusBadge status={review.status} />
           </div>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground mt-2">
-            <div className="flex items-center gap-1.5">
-              <span className="font-medium text-foreground">{review.repoName}</span>
-              <span>#{review.pullRequestNumber}</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground mt-2 font-mono">
+            <div className="flex items-center gap-1.5 bg-[#14171A] px-2.5 py-1 rounded-md border border-[#22262B]">
+              <span className="font-semibold text-foreground">{review.repoName}</span>
+              <span className="text-muted-foreground/60">#{review.pullRequestNumber}</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <GitBranch className="h-4 w-4" />
+            <div className="flex items-center gap-1.5 bg-[#14171A] px-2.5 py-1 rounded-md border border-[#22262B]">
+              <GitBranch className="h-3.5 w-3.5 text-primary" />
               <span>{review.branch}</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Code className="h-4 w-4" />
-              <span className="font-mono">{review.commitSha.substring(0, 7)}</span>
+            <div className="flex items-center gap-1.5 bg-[#14171A] px-2.5 py-1 rounded-md border border-[#22262B]">
+              <Code className="h-3.5 w-3.5 text-muted-foreground" />
+              <span>{review.commitSha.substring(0, 7)}</span>
             </div>
-            <div className="flex items-center gap-1.5">
-              <Calendar className="h-4 w-4" />
+            <div className="flex items-center gap-1.5 bg-[#14171A] px-2.5 py-1 rounded-md border border-[#22262B]">
+              <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
               <span>{new Date(review.createdAt).toLocaleString()}</span>
             </div>
           </div>
@@ -60,7 +60,7 @@ export default async function ReviewDetailPage(props: { params: Promise<{ id: st
             href={`https://github.com/${review.repoName}/pull/${review.pullRequestNumber}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center justify-center rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-foreground hover:bg-secondary transition-colors"
+            className="inline-flex items-center justify-center rounded-lg border border-[#22262B] bg-[#14171A] px-4 py-2 text-xs font-semibold text-foreground hover:bg-[#1C1F22] hover:text-primary transition-all shadow-md shadow-black/20"
           >
             View on GitHub
           </a>
@@ -74,37 +74,49 @@ export default async function ReviewDetailPage(props: { params: Promise<{ id: st
         </div>
       )}
 
-      {/* Review Summary Card */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
-        <div className="rounded-xl border border-border bg-card p-5 flex items-center justify-between">
+      {/* Review Summary Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-10">
+        <div className="rounded-xl border border-[#22262B] bg-[#14171A] p-5 flex items-center justify-between shadow-lg shadow-black/20 hover:border-[#E85D2F]/30 transition-all group">
           <div>
-            <p className="text-sm font-medium text-muted-foreground mb-1">Architecture Score</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-1">Architecture Score</p>
             <AnimatedAcsScore score={review.acsScore || 0} />
           </div>
-          <AcsScoreRing score={review.acsScore || 0} size={52} strokeWidth={4} />
+          <div className="group-hover:scale-105 transition-transform">
+            <AcsScoreRing score={review.acsScore || 0} size={52} strokeWidth={4} />
+          </div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
-          <p className="text-sm font-medium text-muted-foreground mb-3">Overall Severity</p>
-          <SeverityBadge level={review.severity} className="text-sm px-3 py-1" />
+        <div className="rounded-xl border border-[#22262B] bg-[#14171A] p-5 shadow-lg shadow-black/20 flex flex-col justify-between hover:border-[#22262B]/80 transition-all">
+          <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">Overall Severity</p>
+          <div>
+            <SeverityBadge level={review.severity} className="text-xs px-3 py-1" />
+          </div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="rounded-xl border border-[#22262B] bg-[#14171A] p-5 shadow-lg shadow-black/20 flex flex-col justify-between hover:border-[#22262B]/80 transition-all">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-muted-foreground">Changes</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Changes</p>
             <FileDiff className="h-4 w-4 text-muted-foreground" />
           </div>
-          <div className="flex items-center gap-3 text-sm font-medium">
+          <div className="flex items-center gap-3 text-sm font-semibold font-mono">
             <span className="text-foreground">{review.filesChanged} files</span>
             <span className="text-success">+{review.linesAdded}</span>
             <span className="text-critical">-{review.linesDeleted}</span>
           </div>
         </div>
-        <div className="rounded-xl border border-border bg-card p-5">
+        <div className="rounded-xl border border-[#22262B] bg-[#14171A] p-5 shadow-lg shadow-black/20 flex flex-col justify-between hover:border-[#22262B]/80 transition-all">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-sm font-medium text-muted-foreground">Duration</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Duration</p>
             <Clock className="h-4 w-4 text-muted-foreground" />
           </div>
-          <p className="text-2xl font-bold text-foreground">
-            {isRunning ? "Running..." : review.duration || "N/A"}
+          <p className="text-xl font-bold text-foreground font-mono">
+            {isRunning ? (
+              <span className="text-primary animate-pulse flex items-center gap-1.5 text-sm uppercase tracking-wider">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </span>
+                Running...
+              </span>
+            ) : review.duration || "N/A"}
           </p>
         </div>
       </div>
