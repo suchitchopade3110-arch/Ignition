@@ -13,6 +13,7 @@
   --color-popover: #202024;
   --color-popover-foreground: #FAFAFA;
   --color-primary: #FF4500;
+  --color-primary-hover: #FF6A1A;
   --color-primary-foreground: #FFFFFF;
   --color-secondary: #27272A;
   --color-secondary-foreground: #E4E4E7;
@@ -30,6 +31,28 @@
   --color-warning: #F59E0B;
   --color-critical: #DC2626;
   --color-info: #3B82F6;
+
+  /*
+   * Landing / editorial two-tone palette.
+   * The marketing page alternates dark and warm-cream sections; these are
+   * deliberately warmer than the application tokens above and are kept as a
+   * distinct, named scale rather than being flattened into them.
+   */
+  /* Dark ramp, base page colour through to the strongest hairline */
+  --color-surface-dark: #090A0B;
+  --color-surface-dark-raised: #0E1012;
+  --color-surface-dark-panel: #121416;
+  --color-surface-dark-elevated: #191C1F;
+  --color-surface-dark-border: #202326;
+  --color-surface-dark-border-strong: #292D31;
+  --color-surface-dark-fg: #F4F3EF;
+  --color-surface-dark-muted: #9A9C9F;
+
+  /* Warm cream sections */
+  --color-surface-light: #F1EFE9;
+  --color-surface-light-border: #D6D3C9;
+  --color-surface-light-fg: #17191B;
+  --color-surface-light-muted: #5F6265;
 
   /* Glassmorphism Semantic Tokens */
   --color-glass-surface: rgba(24, 24, 27, 0.65);

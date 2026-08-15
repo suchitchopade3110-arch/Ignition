@@ -36,7 +36,7 @@ export function LandingNav() {
         transition={{ duration: 0.4, ease: "easeOut" }}
         className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
           isScrolled
-            ? "bg-[#090A0B]/85 backdrop-blur-md border-b border-[#202326] py-3.5 shadow-md shadow-black/40"
+            ? "bg-surface-dark/85 backdrop-blur-md border-b border-surface-dark-border py-3.5 shadow-md shadow-black/40"
             : "bg-transparent py-5"
         }`}
       >
@@ -45,7 +45,7 @@ export function LandingNav() {
             {/* Brand Logo - Big and Clearly Visible */}
             <Link
               href="/"
-              className="flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4D0A] rounded-lg group"
+              className="flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded-lg group"
               aria-label="Ignition Home"
             >
               <Image
@@ -59,22 +59,22 @@ export function LandingNav() {
             </Link>
 
             {/* Desktop Navigation Links matching Reference */}
-            <nav className="hidden md:flex items-center gap-7 text-xs font-sans font-medium text-[#9A9C9F]">
+            <nav className="hidden md:flex items-center gap-7 text-xs font-sans font-medium text-surface-dark-muted">
               <a
                 href="#capabilities"
-                className="hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 Product
               </a>
               <a
                 href="#how-it-works"
-                className="hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 How it works
               </a>
               <a
                 href="#security"
-                className="hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 Security
               </a>
@@ -82,7 +82,7 @@ export function LandingNav() {
                 href="https://github.com"
                 target="_blank"
                 rel="noreferrer"
-                className="hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 GitHub
               </a>
@@ -90,7 +90,7 @@ export function LandingNav() {
                 href="http://localhost:8000/docs"
                 target="_blank"
                 rel="noreferrer"
-                className="hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 Docs
               </a>
@@ -100,13 +100,13 @@ export function LandingNav() {
             <div className="hidden md:flex items-center gap-6">
               <Link
                 href="/login"
-                className="text-xs font-sans font-medium text-[#9A9C9F] hover:text-[#F4F3EF] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A] rounded px-1"
+                className="text-xs font-sans font-medium text-surface-dark-muted hover:text-surface-dark-fg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary rounded px-1"
               >
                 Sign in
               </Link>
               <Link
                 href="/login"
-                className="group flex items-center gap-2 px-4 py-2 bg-[#FF4D0A] hover:bg-[#FF6A1A] text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(255,77,10,0.25)] hover:shadow-[0_0_20px_rgba(255,77,10,0.4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4D0A]"
+                className="group flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(255,69,0,0.25)] hover:shadow-[0_0_20px_rgba(255,69,0,0.4)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 <span>Connect GitHub</span>
                 <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
@@ -116,7 +116,7 @@ export function LandingNav() {
             {/* Mobile Menu Trigger */}
             <button
               type="button"
-              className="md:hidden p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-[#9A9C9F] hover:text-[#F4F3EF] rounded-lg hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4D0A] relative z-50"
+              className="md:hidden p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-surface-dark-muted hover:text-surface-dark-fg rounded-lg hover:bg-white/[0.05] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary relative z-50"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               aria-label="Toggle navigation menu"
               aria-expanded={isMobileMenuOpen}
@@ -129,26 +129,26 @@ export function LandingNav() {
 
       {/* Mobile Menu Slideout */}
       {isMobileMenuOpen && (
-        <div className="fixed inset-0 z-50 bg-[#090A0B]/95 backdrop-blur-xl md:hidden pt-28 px-6 pb-12 border-b border-[#202326] flex flex-col justify-between overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-surface-dark/95 backdrop-blur-xl md:hidden pt-28 px-6 pb-12 border-b border-surface-dark-border flex flex-col justify-between overflow-y-auto">
           <div className="flex flex-col gap-6">
             <a
               href="#capabilities"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="text-lg font-sans font-medium text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors py-2 border-b border-white/[0.04]"
+              className="text-lg font-sans font-medium text-surface-dark-fg hover:text-primary transition-colors py-2 border-b border-white/[0.04]"
             >
               Product
             </a>
             <a
               href="#how-it-works"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="text-lg font-sans font-medium text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors py-2 border-b border-white/[0.04]"
+              className="text-lg font-sans font-medium text-surface-dark-fg hover:text-primary transition-colors py-2 border-b border-white/[0.04]"
             >
               How it works
             </a>
             <a
               href="#security"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="text-lg font-sans font-medium text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors py-2 border-b border-white/[0.04]"
+              className="text-lg font-sans font-medium text-surface-dark-fg hover:text-primary transition-colors py-2 border-b border-white/[0.04]"
             >
               Security
             </a>
@@ -157,7 +157,7 @@ export function LandingNav() {
               target="_blank"
               rel="noreferrer"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="text-lg font-sans font-medium text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors py-2 border-b border-white/[0.04]"
+              className="text-lg font-sans font-medium text-surface-dark-fg hover:text-primary transition-colors py-2 border-b border-white/[0.04]"
             >
               GitHub
             </a>
@@ -166,24 +166,24 @@ export function LandingNav() {
               target="_blank"
               rel="noreferrer"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="text-lg font-sans font-medium text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors py-2 border-b border-white/[0.04]"
+              className="text-lg font-sans font-medium text-surface-dark-fg hover:text-primary transition-colors py-2 border-b border-white/[0.04]"
             >
               Docs
             </a>
           </div>
 
-          <div className="flex flex-col gap-4 pt-8 border-t border-[#202326]">
+          <div className="flex flex-col gap-4 pt-8 border-t border-surface-dark-border">
             <Link
               href="/login"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="w-full py-3 text-center text-sm font-sans font-medium text-[#9A9C9F] hover:text-[#F4F3EF] rounded-lg border border-[#292D31] bg-[#121416]"
+              className="w-full py-3 text-center text-sm font-sans font-medium text-surface-dark-muted hover:text-surface-dark-fg rounded-lg border border-surface-dark-border-strong bg-surface-dark-panel"
             >
               Sign in
             </Link>
             <Link
               href="/login"
               onClick={() => setIsMobileMenuOpen(false)}
-              className="w-full py-3 text-center text-sm font-mono uppercase tracking-wider font-bold text-white bg-[#FF4D0A] hover:bg-[#FF6A1A] rounded-lg shadow-lg"
+              className="w-full py-3 text-center text-sm font-mono uppercase tracking-wider font-bold text-white bg-primary hover:bg-primary-hover rounded-lg shadow-lg"
             >
               Connect GitHub →
             </Link>

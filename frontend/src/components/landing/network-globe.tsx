@@ -161,10 +161,10 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
         tiltX: 0.32,
         tiltY: 0.15,
         radiusMultiplier: 1.15,
-        color: "rgba(255, 77, 10, 0.12)",
+        color: "rgba(255,69,0, 0.12)",
         speed: 0.0018,
         angle: 0.4,
-        satellite: { angle: 0.4, size: 1.8, color: "#FF4D0A" },
+        satellite: { angle: 0.4, size: 1.8, color: "#FF4500" },
       },
       {
         tiltX: -0.42,
@@ -274,10 +274,10 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
         cy,
         globeRadius * 1.16
       )
-      atmosphereGradient.addColorStop(0, "rgba(255, 77, 10, 0)")
-      atmosphereGradient.addColorStop(0.85, "rgba(255, 77, 10, 0.04)")
-      atmosphereGradient.addColorStop(0.96, "rgba(255, 77, 10, 0.07)")
-      atmosphereGradient.addColorStop(1, "rgba(255, 77, 10, 0)")
+      atmosphereGradient.addColorStop(0, "rgba(255,69,0, 0)")
+      atmosphereGradient.addColorStop(0.85, "rgba(255,69,0, 0.04)")
+      atmosphereGradient.addColorStop(0.96, "rgba(255,69,0, 0.07)")
+      atmosphereGradient.addColorStop(1, "rgba(255,69,0, 0)")
 
       ctx.fillStyle = atmosphereGradient
       ctx.beginPath()
@@ -358,7 +358,7 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
           ctx.arc(proj.px, proj.py, size, 0, Math.PI * 2)
 
           if (pt.isOrange) {
-            ctx.fillStyle = `rgba(255, 77, 10, ${alpha * 0.85})`
+            ctx.fillStyle = `rgba(255,69,0, ${alpha * 0.85})`
           } else {
             ctx.fillStyle = `rgba(244, 243, 239, ${alpha * 0.65})`
           }
@@ -406,7 +406,7 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
           ctx.beginPath()
           ctx.moveTo(fromProj.px, fromProj.py)
           ctx.quadraticCurveTo(midProj.px, midProj.py, toProj.px, toProj.py)
-          ctx.strokeStyle = `rgba(255, 77, 10, ${arcAlpha})`
+          ctx.strokeStyle = `rgba(255,69,0, ${arcAlpha})`
           ctx.lineWidth = isFront ? 1.0 : 0.6
           ctx.stroke()
 
@@ -424,7 +424,7 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
             ctx.beginPath()
             ctx.arc(pulseX, pulseY, 2.2, 0, Math.PI * 2)
             ctx.fillStyle = "#FFFFFF"
-            ctx.shadowColor = "#FF4D0A"
+            ctx.shadowColor = "#FF4500"
             ctx.shadowBlur = 6
             ctx.fill()
             ctx.shadowBlur = 0
@@ -432,7 +432,7 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
             // Tiny outer aura
             ctx.beginPath()
             ctx.arc(pulseX, pulseY, 4.2, 0, Math.PI * 2)
-            ctx.fillStyle = "rgba(255, 77, 10, 0.35)"
+            ctx.fillStyle = "rgba(255,69,0, 0.35)"
             ctx.fill()
           }
         }
@@ -457,9 +457,9 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
         if (h.hub.isMajor) {
           const haloRadius = isCurrentlyPulsing ? r * 2.8 : r * 2.0
           const glowGrad = ctx.createRadialGradient(h.px, h.py, r * 0.3, h.px, h.py, haloRadius)
-          glowGrad.addColorStop(0, `rgba(255, 77, 10, ${alpha * 0.55})`)
+          glowGrad.addColorStop(0, `rgba(255,69,0, ${alpha * 0.55})`)
           glowGrad.addColorStop(0.6, `rgba(255, 106, 26, ${alpha * 0.15})`)
-          glowGrad.addColorStop(1, "rgba(255, 77, 10, 0)")
+          glowGrad.addColorStop(1, "rgba(255,69,0, 0)")
 
           ctx.fillStyle = glowGrad
           ctx.beginPath()
@@ -480,8 +480,8 @@ export function NetworkGlobe({ className = "" }: { className?: string }) {
         ctx.beginPath()
         ctx.arc(h.px, h.py, r, 0, Math.PI * 2)
         if (h.hub.isMajor) {
-          ctx.fillStyle = `rgba(255, 77, 10, ${alpha})`
-          ctx.shadowColor = "#FF4D0A"
+          ctx.fillStyle = `rgba(255,69,0, ${alpha})`
+          ctx.shadowColor = "#FF4500"
           ctx.shadowBlur = 4
           ctx.fill()
           ctx.shadowBlur = 0

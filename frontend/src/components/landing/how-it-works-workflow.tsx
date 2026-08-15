@@ -32,11 +32,11 @@ const workflowSteps = [
 
 export function HowItWorksWorkflow() {
   return (
-    <section id="how-it-works" className="py-24 md:py-32 relative bg-[#090A0B]">
+    <section id="how-it-works" className="py-24 md:py-32 relative bg-surface-dark">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         {/* Section Category Header */}
         <div className="mb-16 md:mb-20">
-          <span className="font-mono text-xs text-[#FF4D0A] uppercase tracking-widest font-bold">
+          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
             02 / HOW IGNITION WORKS
           </span>
         </div>
@@ -56,26 +56,26 @@ export function HowItWorksWorkflow() {
               >
                 {/* Top Icon & Connecting Line */}
                 <div className="flex items-center">
-                  <div className="h-14 w-14 rounded-full bg-[#121416] border border-[#292D31] flex items-center justify-center text-[#F4F3EF] shadow-md z-10 shrink-0">
-                    <Icon className="h-5 w-5 text-[#F4F3EF]" />
+                  <div className="h-14 w-14 rounded-full bg-surface-dark-panel border border-surface-dark-border-strong flex items-center justify-center text-surface-dark-fg shadow-md z-10 shrink-0">
+                    <Icon className="h-5 w-5 text-surface-dark-fg" />
                   </div>
 
                   {/* Horizontal Orange Connector Line with Arrow for desktop */}
                   {idx < workflowSteps.length - 1 && (
                     <div className="hidden md:flex flex-1 items-center px-2">
-                      <div className="h-px flex-1 bg-gradient-to-r from-[#FF4D0A]/60 to-[#FF4D0A]/30" />
-                      <div className="w-1.5 h-1.5 border-t border-r border-[#FF4D0A] transform rotate-45 -ml-1" />
+                      <div className="h-px flex-1 bg-gradient-to-r from-primary/60 to-primary/30" />
+                      <div className="w-1.5 h-1.5 border-t border-r border-primary transform rotate-45 -ml-1" />
                     </div>
                   )}
                 </div>
 
                 {/* Content */}
                 <div className="flex flex-col gap-2 pt-2">
-                  <span className="font-mono text-xs font-bold text-[#FF4D0A]">{step.number}</span>
-                  <h3 className="text-lg font-bold text-[#F4F3EF] uppercase font-sans tracking-wide">
+                  <span className="font-mono text-xs font-bold text-primary">{step.number}</span>
+                  <h3 className="text-lg font-bold text-surface-dark-fg uppercase font-sans tracking-wide">
                     {step.phase}
                   </h3>
-                  <p className="text-xs sm:text-sm text-[#9A9C9F] leading-relaxed">
+                  <p className="text-xs sm:text-sm text-surface-dark-muted leading-relaxed">
                     {step.description}
                   </p>
                 </div>

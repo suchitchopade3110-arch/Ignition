@@ -114,12 +114,27 @@ class ApiClient {
 
     const url = `${appConfig.apiUrl}${endpoint}`
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+    let timedOut = false
+    const timeoutId = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, timeoutMs)
+
+    // Honour a caller-supplied signal *in addition to* the timeout. Passing the
+    // caller's signal straight through would silently disable the timeout.
+    const callerSignal = fetchOptions.signal
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        controller.abort()
+      } else {
+        callerSignal.addEventListener("abort", () => controller.abort(), { once: true })
+      }
+    }
 
     try {
       const response = await fetch(url, {
         ...fetchOptions,
-        signal: fetchOptions.signal || controller.signal,
+        signal: controller.signal,
         credentials: "include", // Send session cookie across requests
         headers: {
           "Content-Type": "application/json",
@@ -180,6 +195,17 @@ class ApiClient {
       }
 
       const isAbort = error instanceof DOMException && error.name === "AbortError"
+
+      // An abort is only a timeout if our own timer fired; otherwise the caller
+      // cancelled (component unmount, query invalidation) and should not be
+      // surfaced as a network failure.
+      if (isAbort && !timedOut) {
+        throw new ApiError({
+          message: "Request was cancelled.",
+          code: "CANCELLED",
+        })
+      }
+
       throw new ApiError({
         message: isAbort
           ? `Request timed out after ${timeoutMs / 1000}s.`

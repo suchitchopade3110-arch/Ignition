@@ -32,17 +32,17 @@ const capabilities = [
 
 export function CoreCapabilitiesGrid() {
   return (
-    <section id="capabilities" className="py-24 md:py-32 relative bg-[#090A0B] border-t border-[#202326]">
+    <section id="capabilities" className="py-24 md:py-32 relative bg-surface-dark border-t border-surface-dark-border">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         {/* Section Category Header */}
         <div className="mb-16 md:mb-20">
-          <span className="font-mono text-xs text-[#FF4D0A] uppercase tracking-widest font-bold">
+          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
             03 / CORE CAPABILITIES
           </span>
         </div>
 
         {/* 4 Horizontally Separated Columns */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-[#202326] -mx-6 px-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-surface-dark-border -mx-6 px-6">
           {capabilities.map((cap, idx) => {
             const Icon = cap.icon
             return (
@@ -54,15 +54,15 @@ export function CoreCapabilitiesGrid() {
                 transition={{ duration: 0.4, delay: idx * 0.1 }}
                 className="flex flex-col gap-4 py-8 lg:py-0 lg:px-8 first:pl-0 last:pr-0"
               >
-                <div className="text-[#FF4D0A]">
+                <div className="text-primary">
                   <Icon className="h-7 w-7 stroke-[1.5]" />
                 </div>
 
-                <h3 className="text-base font-bold text-[#F4F3EF] uppercase font-sans tracking-wide leading-snug">
+                <h3 className="text-base font-bold text-surface-dark-fg uppercase font-sans tracking-wide leading-snug">
                   {cap.title}
                 </h3>
 
-                <p className="text-xs sm:text-sm text-[#9A9C9F] leading-relaxed">
+                <p className="text-xs sm:text-sm text-surface-dark-muted leading-relaxed">
                   {cap.description}
                 </p>
               </motion.div>

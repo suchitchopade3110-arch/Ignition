@@ -12,17 +12,17 @@ const impactMetrics = [
 
 export function EngineeringImpactStrip() {
   return (
-    <section className="py-24 md:py-28 relative bg-[#F1EFE9] text-[#17191B]">
+    <section className="py-24 md:py-28 relative bg-surface-light text-surface-light-fg">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         {/* Section Category Header */}
         <div className="mb-14">
-          <span className="font-mono text-xs text-[#FF4D0A] uppercase tracking-widest font-bold">
+          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
             04 / ENGINEERING IMPACT
           </span>
         </div>
 
         {/* 5-Column Metrics Strip with Dividers */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-y sm:divide-y-0 lg:divide-x divide-[#D6D3C9] -mx-4 px-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 divide-y sm:divide-y-0 lg:divide-x divide-surface-light-border -mx-4 px-4">
           {impactMetrics.map((item, idx) => (
             <motion.div
               key={item.label}
@@ -32,10 +32,10 @@ export function EngineeringImpactStrip() {
               transition={{ duration: 0.4, delay: idx * 0.08 }}
               className="flex flex-col gap-2 py-6 sm:py-4 lg:py-0 lg:px-6 first:pl-0 last:pr-0"
             >
-              <span className="text-4xl sm:text-5xl font-black text-[#FF4D0A] font-mono tabular-nums tracking-tight">
+              <span className="text-4xl sm:text-5xl font-black text-primary font-mono tabular-nums tracking-tight">
                 {item.value}
               </span>
-              <span className="text-xs sm:text-sm font-medium text-[#5F6265] leading-snug">
+              <span className="text-xs sm:text-sm font-medium text-surface-light-muted leading-snug">
                 {item.label}
               </span>
             </motion.div>

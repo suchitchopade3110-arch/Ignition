@@ -15,7 +15,7 @@ export function HeroSection() {
               initial={{ opacity: 0, y: 15 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4 }}
-              className="flex items-center gap-2 font-mono text-xs text-[#FF4D0A] uppercase tracking-widest font-bold"
+              className="flex items-center gap-2 font-mono text-xs text-primary uppercase tracking-widest font-bold"
             >
               <span>01 / CODE INTELLIGENCE</span>
             </motion.div>
@@ -24,19 +24,19 @@ export function HeroSection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1 }}
-              className="text-4xl sm:text-6xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight text-[#F4F3EF] leading-[0.98] uppercase font-sans select-none"
+              className="text-4xl sm:text-6xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight text-surface-dark-fg leading-[0.98] uppercase font-sans select-none"
             >
               YOUR CODEBASE <br />
               IS ALREADY <br />
               TELLING YOU <br />
-              <span className="text-[#FF4D0A]">WHAT IS WRONG.</span>
+              <span className="text-primary">WHAT IS WRONG.</span>
             </motion.h1>
 
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.2 }}
-              className="text-sm sm:text-base text-[#9A9C9F] leading-relaxed max-w-lg"
+              className="text-sm sm:text-base text-surface-dark-muted leading-relaxed max-w-lg"
             >
               Ignition is a multi-agent code review system that understands your repository, analyzes
               every change, and delivers actionable insights with engineering context.
@@ -51,7 +51,7 @@ export function HeroSection() {
             >
               <Link
                 href="/login"
-                className="group flex items-center gap-2.5 px-6 py-3.5 bg-[#FF4D0A] hover:bg-[#FF6A1A] text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_20px_rgba(255,77,10,0.3)] hover:shadow-[0_0_30px_rgba(255,77,10,0.5)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4D0A]"
+                className="group flex items-center gap-2.5 px-6 py-3.5 bg-primary hover:bg-primary-hover text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_20px_rgba(255,69,0,0.3)] hover:shadow-[0_0_30px_rgba(255,69,0,0.5)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
               >
                 <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -65,7 +65,7 @@ export function HeroSection() {
 
               <a
                 href="#how-it-works"
-                className="text-xs font-mono uppercase tracking-wider text-[#F4F3EF] hover:text-[#FF4D0A] transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF4D0A]"
+                className="text-xs font-mono uppercase tracking-wider text-surface-dark-fg hover:text-primary transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
               >
                 See how it works ↓
               </a>
@@ -76,25 +76,25 @@ export function HeroSection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.4 }}
-              className="grid grid-cols-4 gap-4 pt-6 border-t border-[#202326] font-mono"
+              className="grid grid-cols-4 gap-4 pt-6 border-t border-surface-dark-border font-mono"
             >
               <div>
-                <div className="text-[10px] text-[#9A9C9F] uppercase tracking-wider mb-1">ACS SCORE</div>
-                <div className="text-xl sm:text-2xl font-black text-[#FF4D0A] tabular-nums">
-                  94<span className="text-xs text-[#9A9C9F] font-normal">/100</span>
+                <div className="text-[10px] text-surface-dark-muted uppercase tracking-wider mb-1">ACS SCORE</div>
+                <div className="text-xl sm:text-2xl font-black text-primary tabular-nums">
+                  94<span className="text-xs text-surface-dark-muted font-normal">/100</span>
                 </div>
               </div>
               <div>
-                <div className="text-[10px] text-[#9A9C9F] uppercase tracking-wider mb-1">AGENTS</div>
-                <div className="text-xl sm:text-2xl font-black text-[#F4F3EF] tabular-nums">04</div>
+                <div className="text-[10px] text-surface-dark-muted uppercase tracking-wider mb-1">AGENTS</div>
+                <div className="text-xl sm:text-2xl font-black text-surface-dark-fg tabular-nums">04</div>
               </div>
               <div>
-                <div className="text-[10px] text-[#9A9C9F] uppercase tracking-wider mb-1">FINDINGS</div>
-                <div className="text-xl sm:text-2xl font-black text-[#F4F3EF] tabular-nums">07</div>
+                <div className="text-[10px] text-surface-dark-muted uppercase tracking-wider mb-1">FINDINGS</div>
+                <div className="text-xl sm:text-2xl font-black text-surface-dark-fg tabular-nums">07</div>
               </div>
               <div>
-                <div className="text-[10px] text-[#9A9C9F] uppercase tracking-wider mb-1">STATUS</div>
-                <div className="text-xs sm:text-sm font-bold text-[#FF4D0A] uppercase mt-1.5">
+                <div className="text-[10px] text-surface-dark-muted uppercase tracking-wider mb-1">STATUS</div>
+                <div className="text-xs sm:text-sm font-bold text-primary uppercase mt-1.5">
                   COMPLETED
                 </div>
               </div>

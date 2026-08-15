@@ -7,25 +7,25 @@ import { NetworkGlobe } from "./network-globe"
 
 export function FinalCtaSection() {
   return (
-    <section className="py-24 md:py-32 relative bg-[#090A0B] border-t border-[#202326] overflow-hidden">
+    <section className="py-24 md:py-32 relative bg-surface-dark border-t border-surface-dark-border overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 relative z-10">
         {/* Section Category Header */}
         <div className="mb-12 md:mb-16">
-          <span className="font-mono text-xs text-[#FF4D0A] uppercase tracking-widest font-bold">
+          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
             05 / GET STARTED
           </span>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
           {/* Left Column (~48% width): Headline, Copy, & CTA */}
-          <div className="lg:col-span-6 flex flex-col justify-between gap-8 lg:pr-8 lg:border-r lg:border-[#202326]/80">
+          <div className="lg:col-span-6 flex flex-col justify-between gap-8 lg:pr-8 lg:border-r lg:border-surface-dark-border/80">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true }}
               transition={{ duration: 0.5 }}
             >
-              <h2 className="text-4xl sm:text-5xl xl:text-6xl font-black text-[#F4F3EF] uppercase leading-[1.0] tracking-tight font-sans">
+              <h2 className="text-4xl sm:text-5xl xl:text-6xl font-black text-surface-dark-fg uppercase leading-[1.0] tracking-tight font-sans">
                 READY TO REVIEW <br />
                 DIFFERENTLY?
               </h2>
@@ -38,14 +38,14 @@ export function FinalCtaSection() {
               transition={{ duration: 0.5, delay: 0.15 }}
               className="flex flex-col gap-6 max-w-md"
             >
-              <p className="text-sm sm:text-base text-[#9A9C9F] leading-relaxed font-sans">
+              <p className="text-sm sm:text-base text-surface-dark-muted leading-relaxed font-sans">
                 Connect your GitHub repository and let Ignition start the analysis.
               </p>
 
               <div>
                 <Link
                   href="/login"
-                  className="group inline-flex items-center gap-2.5 px-6 py-3.5 bg-[#FF4D0A] hover:bg-[#FF6A1A] text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_20px_rgba(255,77,10,0.35)] hover:shadow-[0_0_30px_rgba(255,77,10,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF4D0A]"
+                  className="group inline-flex items-center gap-2.5 px-6 py-3.5 bg-primary hover:bg-primary-hover text-white text-xs font-mono uppercase tracking-wider font-bold rounded-lg transition-all shadow-[0_0_20px_rgba(255,69,0,0.35)] hover:shadow-[0_0_30px_rgba(255,69,0,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 >
                   <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path

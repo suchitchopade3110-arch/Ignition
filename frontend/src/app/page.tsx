@@ -5,10 +5,11 @@ import { HowItWorksWorkflow } from "@/components/landing/how-it-works-workflow"
 import { CoreCapabilitiesGrid } from "@/components/landing/core-capabilities-grid"
 import { EngineeringImpactStrip } from "@/components/landing/engineering-impact-strip"
 import { FinalCtaSection } from "@/components/landing/final-cta-section"
+import { LandingFooter } from "@/components/landing/landing-footer"
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-[#090A0B] text-[#F4F3EF] selection:bg-[#FF4D0A]/30 selection:text-white relative overflow-x-hidden font-sans">
+    <div className="min-h-screen bg-surface-dark text-surface-dark-fg selection:bg-primary/30 selection:text-white relative overflow-x-hidden font-sans">
       {/* Global Navigation */}
       <LandingNav />
 
@@ -32,6 +33,8 @@ export default function Home() {
         {/* 05 / Final CTA with Animated Technical Globe */}
         <FinalCtaSection />
       </main>
+
+      <LandingFooter />
     </div>
   )
 }
