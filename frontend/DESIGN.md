@@ -17,6 +17,13 @@ electric-blue/emerald default), hairline low-opacity borders, mono reserved for 
 glass on working surfaces — this is an app people stare at diffs and findings in, not a media
 showcase.
 
+> **Open decision.** This section states flat-with-hairlines and forbids glass on data surfaces.
+> The shipped dashboard does use glass (`backdrop-blur` on stats cards and panels) and a
+> `.glass-panel` / `.glass-sidebar` / `.glass-header` utility set exists in `globals.css`. The
+> `prefers-reduced-transparency` fallback that glass requires is now implemented, so the shipped
+> version is at least accessible. Spec and implementation still disagree on intent: either relax
+> this section to permit glass on app panels, or strip glass back to the nav and modals. Pick one.
+
 **Morphism decision: flat with hairline depth, not glassmorphism.**
 - Glassmorphism is explicitly wrong for dashboards: `backdrop-filter` panels read as decorative
   once the screen is full of diffs and findings, and blur tanks contrast on dense text.
@@ -55,6 +62,32 @@ Five roles total (background / surface / border / accent / status), no second ac
 Rule going forward: saturation stays under 80%, one accent max, no gradient gets added to any
 component beyond the two already in the hero (headline gradient, glow-shadow CTA). Don't let
 gradients spread into dashboard chrome.
+
+### Landing two-tone scale
+
+The marketing page alternates dark and warm-cream grounds. This is deliberate and is kept as a
+distinct named scale rather than being flattened into the application tokens above.
+
+| Token | Value | Role |
+|---|---|---|
+| `--color-surface-dark` | `#090A0B` | dark section ground |
+| `--color-surface-dark-raised` | `#0E1012` | first lift off the ground |
+| `--color-surface-dark-panel` | `#121416` | panel fill |
+| `--color-surface-dark-elevated` | `#191C1F` | elevated panel fill |
+| `--color-surface-dark-border` | `#202326` | hairline |
+| `--color-surface-dark-border-strong` | `#292D31` | emphasised hairline |
+| `--color-surface-dark-fg` | `#F4F3EF` | text on dark |
+| `--color-surface-dark-muted` | `#9A9C9F` | secondary text on dark |
+| `--color-surface-light` | `#F1EFE9` | cream section ground |
+| `--color-surface-light-border` | `#D6D3C9` | hairline on cream |
+| `--color-surface-light-fg` | `#17191B` | text on cream |
+| `--color-surface-light-muted` | `#5F6265` | secondary text on cream |
+
+`--color-primary-hover` (`#FF6A1A`) is the single hover variant of the brand accent.
+
+**No raw hex in components.** Every colour goes through a token. The landing page previously
+carried 259 hardcoded hex literals and two competing brand oranges; that is the failure mode
+this scale exists to prevent.
 
 ---
 
@@ -155,11 +188,30 @@ elsewhere:
 
 ---
 
-## 9. Priority order for implementation
+## 9. Status
 
-1. Broken/missing states: auth guard on protected routes, mobile sidebar collapse, focus-visible
-   rings, loading/empty states wired into every data-fetching page.
-2. AI-tell cleanup: audit `feature-grid.tsx` for the banned three-equal-cards pattern.
-3. Typography: introduce the shared scale and the tabular mono face.
-4. Color: add `--color-elevated`, add `--color-border-subtle`, collapse `danger`/`destructive`.
-5. Motion: extend spring easing from the hero into dashboard state transitions. Do this last.
+Done:
+
+- Auth guard on protected routes, per-route loading and error boundaries, focus-visible rings.
+- `--color-elevated`, `--color-border-subtle`; the `danger`/`destructive` duplicate is collapsed.
+- Tabular mono face (JetBrains Mono) wired up for identifiers and metrics.
+- Landing two-tone palette promoted to tokens; single brand orange across the codebase.
+- Dead landing components removed; the footer is restored and on the page.
+- Heading outline is h1 -> h2 -> h3 with no skipped levels.
+- Skip-to-content link; `prefers-reduced-motion` honoured by framer-motion and CSS;
+  `prefers-reduced-transparency` fallback for every glass surface.
+- Capabilities section rebuilt on an asymmetric 7/5 grid.
+- Dashboard loading, error and empty states scoped per panel.
+- Fabricated trend percentages removed from the dashboard.
+
+Outstanding:
+
+1. Resolve the glass open decision at the top of this document.
+2. Shared type scale. Display sizes are still set ad hoc per component; `text-display` /
+   `text-h1` / `text-h2` / `text-body` / `text-caption` are specified above but not implemented.
+3. Footer placeholder links. Pricing, Privacy, Terms, Security, Changelog and Status all point at
+   `/login` or `/dashboard` because the destination pages do not exist.
+4. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
+5. Extend spring easing from the hero into dashboard state transitions.
+6. De-duplicate the inline glass classes in the dashboard against the `.glass-panel` utility,
+   once the glass decision is settled.
