@@ -4,6 +4,7 @@ import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
 import { AuthProvider } from "@/lib/auth-context"
 import { QueryProvider } from "@/lib/query-provider"
+import { MotionProvider } from "@/lib/motion-provider"
 
 const inter = Inter({
   subsets: ["latin"],
@@ -41,10 +42,18 @@ export default function RootLayout({
       style={{ colorScheme: "dark" }}
     >
       <body className="min-h-screen antialiased bg-background text-foreground font-sans">
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-primary-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+        >
+          Skip to main content
+        </a>
         <QueryProvider>
           <AuthProvider>
-            {children}
-            <Toaster />
+            <MotionProvider>
+              {children}
+              <Toaster />
+            </MotionProvider>
           </AuthProvider>
         </QueryProvider>
       </body>

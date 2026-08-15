@@ -158,7 +158,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </header>
 
           {/* Page Content Viewport */}
-          <main className="flex-1 overflow-y-auto overflow-x-hidden">
+          <main id="main-content" className="flex-1 overflow-y-auto overflow-x-hidden">
             <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 min-w-0 pb-[calc(2rem+env(safe-area-inset-bottom))]">
               {children}
             </div>

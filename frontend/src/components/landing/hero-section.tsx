@@ -17,7 +17,7 @@ export function HeroSection() {
               transition={{ duration: 0.4 }}
               className="flex items-center gap-2 font-mono text-xs text-primary uppercase tracking-widest font-bold"
             >
-              <span>01 / CODE INTELLIGENCE</span>
+              <span>CODE INTELLIGENCE</span>
             </motion.div>
 
             <motion.h1

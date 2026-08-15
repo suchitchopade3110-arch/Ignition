@@ -162,4 +162,49 @@
     backdrop-filter: blur(12px);
     border-right: 1px solid rgba(255, 255, 255, 0.08);
   }
+
+  /*
+   * Reduced-transparency fallback.
+   * Translucent panels over dense text are the first thing to fail for viewers
+   * who disable transparency, so every glass surface collapses to an opaque
+   * fill from the same token ramp.
+   */
+  @media (prefers-reduced-transparency: reduce) {
+    .glass-panel,
+    .glass-panel-subtle {
+      background-color: var(--color-card);
+      backdrop-filter: none;
+    }
+
+    .glass-panel-elevated {
+      background-color: var(--color-elevated);
+      backdrop-filter: none;
+    }
+
+    .glass-header {
+      background-color: var(--color-background);
+      backdrop-filter: none;
+    }
+
+    .glass-sidebar {
+      background-color: var(--color-card);
+      backdrop-filter: none;
+    }
+  }
+}
+
+/*
+ * Motion safety net for plain CSS transitions and animations.
+ * framer-motion is handled separately by MotionConfig reducedMotion="user",
+ * which this cannot reach because those transforms are applied inline.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

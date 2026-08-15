@@ -13,24 +13,24 @@ export default function Home() {
       {/* Global Navigation */}
       <LandingNav />
 
-      {/* Main Content Sections */}
+      {/* Sections alternate dark and warm-cream grounds to break the scroll rhythm. */}
       <main id="main-content">
-        {/* 01 / Hero Section with Real Product Console */}
+        {/* Hero with the live product console */}
         <HeroSection />
 
-        {/* Editorial Belief Section (Warm Off-White) */}
+        {/* Belief statement (cream) */}
         <EditorialBelief />
 
-        {/* 02 / How Ignition Works (4-Stage Pipeline) */}
+        {/* Four-stage pipeline */}
         <HowItWorksWorkflow />
 
-        {/* 03 / Core Capabilities Grid */}
+        {/* Capabilities, asymmetric 7/5 grid */}
         <CoreCapabilitiesGrid />
 
-        {/* 04 / Engineering Impact Metrics (Warm Off-White) */}
+        {/* Impact metrics (cream) */}
         <EngineeringImpactStrip />
 
-        {/* 05 / Final CTA with Animated Technical Globe */}
+        {/* Closing CTA with the animated globe */}
         <FinalCtaSection />
       </main>
 

@@ -9,13 +9,6 @@ export function FinalCtaSection() {
   return (
     <section className="py-24 md:py-32 relative bg-surface-dark border-t border-surface-dark-border overflow-hidden">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 relative z-10">
-        {/* Section Category Header */}
-        <div className="mb-12 md:mb-16">
-          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
-            05 / GET STARTED
-          </span>
-        </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-14 items-center">
           {/* Left Column (~48% width): Headline, Copy, & CTA */}
           <div className="lg:col-span-6 flex flex-col justify-between gap-8 lg:pr-8 lg:border-r lg:border-surface-dark-border/80">

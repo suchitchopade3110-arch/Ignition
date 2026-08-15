@@ -34,11 +34,12 @@ export function HowItWorksWorkflow() {
   return (
     <section id="how-it-works" className="py-24 md:py-32 relative bg-surface-dark">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
-        {/* Section Category Header */}
+        {/* Section heading. Carries the section semantically so the step cards
+            below can sit at h3 without skipping a level. */}
         <div className="mb-16 md:mb-20">
-          <span className="font-mono text-xs text-primary uppercase tracking-widest font-bold">
-            02 / HOW IGNITION WORKS
-          </span>
+          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-surface-dark-fg uppercase leading-[1.05] font-sans max-w-3xl">
+            How Ignition works
+          </h2>
         </div>
 
         {/* 4-Stage Horizontal Pipeline */}
