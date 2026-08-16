@@ -4,6 +4,25 @@ import Link from "next/link"
 import Image from "next/image"
 import { appConfig } from "@/lib/config"
 
+/**
+ * A footer entry with no real destination yet. Rendered as inert text, not
+ * a link — pointing "Terms" or "Status" at /login just because a page
+ * doesn't exist yet is worse than not linking it at all.
+ */
+function ComingSoonItem({ label }: { label: string }) {
+  return (
+    <span
+      aria-disabled="true"
+      className="inline-flex items-center gap-1.5 text-surface-dark-muted/50 cursor-default select-none"
+    >
+      {label}
+      <span className="text-[9px] font-mono uppercase tracking-wider text-surface-dark-muted/40 border border-surface-dark-border rounded px-1 py-0.5 leading-none">
+        Soon
+      </span>
+    </span>
+  )
+}
+
 export function LandingFooter() {
   // Backend-served API docs; resolved from config so these are not pinned to localhost.
   const docsUrl = `${appConfig.backendUrl}/docs`
@@ -52,9 +71,7 @@ export function LandingFooter() {
                   </a>
                 </li>
                 <li>
-                  <Link href="/login" className="hover:text-surface-dark-fg transition-colors">
-                    Pricing
-                  </Link>
+                  <ComingSoonItem label="Pricing" />
                 </li>
               </ul>
             </div>
@@ -86,9 +103,7 @@ export function LandingFooter() {
                   </a>
                 </li>
                 <li>
-                  <Link href="/dashboard" className="hover:text-surface-dark-fg transition-colors">
-                    Changelog
-                  </Link>
+                  <ComingSoonItem label="Changelog" />
                 </li>
               </ul>
             </div>
@@ -100,19 +115,13 @@ export function LandingFooter() {
               </span>
               <ul className="space-y-2 text-surface-dark-muted">
                 <li>
-                  <Link href="/login" className="hover:text-surface-dark-fg transition-colors">
-                    Security
-                  </Link>
+                  <ComingSoonItem label="Security" />
                 </li>
                 <li>
-                  <Link href="/login" className="hover:text-surface-dark-fg transition-colors">
-                    Privacy
-                  </Link>
+                  <ComingSoonItem label="Privacy" />
                 </li>
                 <li>
-                  <Link href="/login" className="hover:text-surface-dark-fg transition-colors">
-                    Terms
-                  </Link>
+                  <ComingSoonItem label="Terms" />
                 </li>
               </ul>
             </div>
@@ -139,9 +148,7 @@ export function LandingFooter() {
                   </a>
                 </li>
                 <li>
-                  <Link href="/dashboard" className="hover:text-surface-dark-fg transition-colors">
-                    Status
-                  </Link>
+                  <ComingSoonItem label="Status" />
                 </li>
               </ul>
             </div>
