@@ -14,6 +14,7 @@ export const mockStats: DashboardStats = {
   hitlPending: 3,
   avgAcsScore: 84,
   issuesFound: 156,
+  issuesFoundTrend: { value: 8, isPositive: true },
 }
 
 export const mockRepositories: Repository[] = [

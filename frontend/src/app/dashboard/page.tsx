@@ -148,6 +148,11 @@ export default function DashboardPage() {
               title="Issues Prevented"
               value={stats.issuesFound}
               icon={Code2}
+              trend={
+                stats.issuesFoundTrend
+                  ? { value: stats.issuesFoundTrend.value, label: "vs last week", isPositive: stats.issuesFoundTrend.isPositive }
+                  : undefined
+              }
               description="Across all repositories"
             />
           </div>

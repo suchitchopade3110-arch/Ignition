@@ -33,11 +33,19 @@ export interface Review {
   acsScore?: number
 }
 
+export interface TrendInfo {
+  value: number // absolute percentage change, always non-negative
+  isPositive: boolean
+}
+
 export interface DashboardStats {
   activeReviews: number
   hitlPending: number
   avgAcsScore: number
   issuesFound: number
+  // Week-over-week change in issues found. Absent — not zero — when the
+  // API has no prior-week baseline to compare against.
+  issuesFoundTrend?: TrendInfo
 }
 
 export interface ReviewDiff {
