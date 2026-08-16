@@ -22,5 +22,9 @@ RUN cd ast-analyzer && bun install
 COPY docker-entrypoint.sh .
 RUN chmod +x docker-entrypoint.sh
 
-EXPOSE 8000 4000
+# Only 8000 (FastAPI) is meant to be reachable from outside the container.
+# The Bun AST analyzer on 4000 is internal-only (see ast-analyzer/server.ts
+# — it now binds 127.0.0.1) and must never be published by whatever
+# platform runs this image.
+EXPOSE 8000
 CMD ["./docker-entrypoint.sh"]

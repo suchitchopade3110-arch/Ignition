@@ -1,0 +1,62 @@
+version: "3.9"
+
+# Local dev / verification topology for the Arq + Redis migration.
+# `backend` (FastAPI, handles HTTP + SSE) and `worker` (Arq, executes
+# review jobs) are separate services on purpose — that split is the whole
+# point of this migration. Scale `backend` to multiple replicas to exercise
+# "a review started via one instance streams correctly from another" for
+# real; both only ever talk to Redis, never to each other directly.
+#
+# Redis here is used for exactly two things (see app/services/
+# redis_client.py): the Arq job queue, and SSE pub/sub. Nothing else.
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks: [ignition]
+
+  ast-analyzer:
+    build:
+      context: ./ast-analyzer
+    environment:
+      # Split into its own container here, so loopback-only (this
+      # service's default — see server.ts) would make it unreachable even
+      # to the backend/worker containers. 0.0.0.0 is safe in this specific
+      # topology because the trust boundary is Docker's private `ignition`
+      # network below, which has no published host port for this service
+      # — nothing outside the compose stack can reach it either way.
+      AST_ANALYZER_HOST: "0.0.0.0"
+    networks: [ignition]
+    # Deliberately no `ports:` — internal to the compose network only.
+
+  backend:
+    build:
+      context: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AST_SERVICE_URL: http://ast-analyzer:4000
+    ports:
+      - "8000:8000"
+    depends_on: [redis, ast-analyzer]
+    networks: [ignition]
+    deploy:
+      replicas: 1 # bump to 2+ locally to verify cross-instance SSE
+
+  worker:
+    build:
+      context: .
+    command: arq app.worker.WorkerSettings
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      AST_SERVICE_URL: http://ast-analyzer:4000
+    depends_on: [redis, ast-analyzer]
+    networks: [ignition]
+
+networks:
+  ignition:
+    driver: bridge

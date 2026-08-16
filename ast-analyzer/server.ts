@@ -44,6 +44,24 @@ const app = new Elysia()
     }
   })
   .get("/healthz", () => ({ status: "ok" }))
-  .listen(4000);
+  .listen({
+    port: 4000,
+    // Default to loopback-only (single-container mode: docker-entrypoint.sh
+    // runs this as a sibling process of FastAPI/the Arq worker in the same
+    // container — same reasoning as the original Phase 1 fix, nothing
+    // outside that container has any legitimate reason to reach /analyze,
+    // which takes a raw git/zip URL to clone with no auth of its own).
+    //
+    // docker-compose.yml's multi-container topology (Phase 2) is the one
+    // place this is overridden to 0.0.0.0 via AST_ANALYZER_HOST — there,
+    // the worker/backend containers are on a different network namespace
+    // than this one, so loopback would make this unreachable even to
+    // legitimate sibling containers. The trust boundary shifts from "bound
+    // to loopback" to "Docker's private compose network with no published
+    // host port" — see the comment on the ast-analyzer service in
+    // docker-compose.yml for why that's an equivalent boundary, not a
+    // weaker one.
+    hostname: process.env.AST_ANALYZER_HOST || "127.0.0.1",
+  });
 
-console.log(`AST analyzer service listening on :${app.server?.port}`);
+console.log(`AST analyzer service listening on ${process.env.AST_ANALYZER_HOST || "127.0.0.1"}:${app.server?.port}`);

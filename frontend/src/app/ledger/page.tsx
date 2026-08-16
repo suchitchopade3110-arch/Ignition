@@ -49,12 +49,13 @@ export default function LedgerPage() {
   } = useLedgerTrend(selectedRepo)
 
   const {
-    data: reviews = [],
+    data: reviewsData,
     isLoading: isReviewsLoading,
     isError: isReviewsError,
     error: reviewsError,
     refetch: refetchReviews,
   } = useRepoReviews(selectedRepo)
+  const reviews = reviewsData?.items ?? []
 
   const isLoading = isReposLoading || isStatsLoading || isTrendLoading || isReviewsLoading
   const isError = isReposError || isStatsError || isTrendError || isReviewsError

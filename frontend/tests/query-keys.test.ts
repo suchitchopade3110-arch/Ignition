@@ -11,7 +11,13 @@ describe("queryKeys Factory", () => {
     expect(queryKeys.repos.all()).toEqual(["repos"])
     expect(queryKeys.repos.list()).toEqual(["repos", "list"])
     expect(queryKeys.repos.settings("repo-123")).toEqual(["repos", "settings", "repo-123"])
-    expect(queryKeys.repos.reviews("org/repo")).toEqual(["repos", "reviews", "org/repo"])
+    // page/pageSize are part of the key deliberately — different pages
+    // must not collide in the cache, or React Query would serve page 1's
+    // cached data back for a page 2 request.
+    expect(queryKeys.repos.reviews("org/repo", 1, 25)).toEqual(["repos", "reviews", "org/repo", 1, 25])
+    expect(queryKeys.repos.reviews("org/repo", 1, 25)).not.toEqual(
+      queryKeys.repos.reviews("org/repo", 2, 25)
+    )
   })
 
   it("isolates reviews list and detail keys", () => {

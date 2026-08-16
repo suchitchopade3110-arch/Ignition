@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 
 from app.graph.state import ReviewState, Finding
-from app.services.llm_client import LLMClient
+from app.services.llm_client import get_llm_client
 from app.services.finding_parser import parse_findings_json
 
 logger = logging.getLogger(__name__)
@@ -42,11 +42,11 @@ async def _phase1_deterministic_registry_check(package_name: str, version: str) 
 async def _phase2_semantic_slopsquat_check(package_name: str) -> list[Finding]:
     """Semantic heuristics for freshly-published / slopsquatted packages."""
     prompt_template = PROMPT_PATH.read_text()
-    llm = LLMClient()
+    llm = get_llm_client()
     prompt = prompt_template.format(package_name=package_name)
 
     try:
-        raw_response = await llm.complete(prompt)
+        raw_response = await llm.complete(prompt, agent_name="agent_2c_security")
         return parse_findings_json(raw_response, agent_name="agent_2c_security")
     except Exception:
         logger.exception("agent_2c_security phase-2 LLM call failed for %s; skipping", package_name)

@@ -17,6 +17,7 @@ import {
   HitlItem,
   LedgerStats,
   LedgerTrend,
+  Paginated,
   Repository,
   RepositorySettings,
   Review,
@@ -64,7 +65,8 @@ class ApiClient {
   async request<T>(
     endpoint: string,
     options: RequestInit = {},
-    timeoutMs: number = 15000
+    timeoutMs: number = 15000,
+    useBackendRoot: boolean = false
   ): Promise<T> {
     const fetchOptions: RequestInit = { ...options }
 
@@ -84,8 +86,8 @@ class ApiClient {
       if (endpoint.startsWith("/repos/") && endpoint.endsWith("/settings")) {
         return mockRepoSettings as unknown as T
       }
-      if (endpoint.startsWith("/repos/") && endpoint.endsWith("/reviews")) {
-        return mockReviews as unknown as T
+      if (endpoint.startsWith("/repos/") && endpoint.includes("/reviews")) {
+        return { items: mockReviews, page: 1, pageSize: mockReviews.length, total: mockReviews.length } as unknown as T
       }
       if (endpoint.startsWith("/ledger/") && endpoint.endsWith("/trend")) {
         return mockLedgerTrend as unknown as T
@@ -94,8 +96,9 @@ class ApiClient {
         return mockLedgerStats as unknown as T
       }
       if (endpoint === "/hitl/pending") return mockHitlPending as unknown as T
-      if (endpoint.startsWith("/reviews?")) return mockReviews as unknown as T
-      if (endpoint === "/reviews") return mockReviews as unknown as T
+      if (endpoint.startsWith("/reviews?") || endpoint === "/reviews") {
+        return { items: mockReviews, page: 1, pageSize: mockReviews.length, total: mockReviews.length } as unknown as T
+      }
       if (endpoint.startsWith("/reviews/")) {
         const id = endpoint.split("/")[2]
         if (id === mockReviewDetail.id) return mockReviewDetail as unknown as T
@@ -112,7 +115,13 @@ class ApiClient {
     // Validate runtime API configuration
     appConfig.validateApiConfig()
 
-    const url = `${appConfig.apiUrl}${endpoint}`
+    // /auth/me and /auth/logout live at the backend root (app/main.py
+    // mounts auth_router unprefixed, since login/callback must be
+    // reachable pre-auth) — not under /api like every other endpoint.
+    // useBackendRoot routes just those two calls correctly instead of
+    // silently 404ing against {apiUrl}/auth/me.
+    const base = useBackendRoot ? appConfig.backendUrl : appConfig.apiUrl
+    const url = `${base}${endpoint}`
     const controller = new AbortController()
     let timedOut = false
     const timeoutId = setTimeout(() => {
@@ -220,11 +229,11 @@ class ApiClient {
 
   // --- Auth ---
   async getAuthMe(): Promise<AuthUser> {
-    return this.request<AuthUser>("/auth/me")
+    return this.request<AuthUser>("/auth/me", {}, 15000, true)
   }
 
   async logout(): Promise<{ status: string }> {
-    return this.request<{ status: string }>("/auth/logout", { method: "POST" })
+    return this.request<{ status: string }>("/auth/logout", { method: "POST" }, 15000, true)
   }
 
   // --- Repositories ---
@@ -260,17 +269,25 @@ class ApiClient {
   }
 
   // --- Reviews ---
-  async getReviews(repo?: string, status?: string, severity?: string): Promise<Review[]> {
+  async getReviews(
+    repo?: string,
+    status?: string,
+    severity?: string,
+    page: number = 1,
+    pageSize: number = 25
+  ): Promise<Paginated<Review>> {
     const params = new URLSearchParams()
     if (repo) params.set("repo", repo)
     if (status) params.set("status", status)
     if (severity) params.set("severity", severity)
-    const queryString = params.toString()
-    return this.request<Review[]>(queryString ? `/reviews?${queryString}` : "/reviews")
+    params.set("page", String(page))
+    params.set("page_size", String(pageSize))
+    return this.request<Paginated<Review>>(`/reviews?${params.toString()}`)
   }
 
-  async getRepoReviews(repoFullName: string): Promise<Review[]> {
-    return this.request<Review[]>(`/repos/${repoFullName}/reviews`)
+  async getRepoReviews(repoFullName: string, page: number = 1, pageSize: number = 25): Promise<Paginated<Review>> {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    return this.request<Paginated<Review>>(`/repos/${repoFullName}/reviews?${params.toString()}`)
   }
 
   async getReview(reviewId: string): Promise<ReviewDetail> {

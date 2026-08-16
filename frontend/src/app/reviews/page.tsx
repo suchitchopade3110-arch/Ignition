@@ -17,11 +17,14 @@ import { ErrorState } from "@/components/ui/error-state"
 import { ApiError } from "@/lib/errors"
 import { useReviews } from "@/hooks/queries/use-reviews"
 
+const PAGE_SIZE = 10
+
 export default function ReviewsPage() {
   const router = useRouter()
-  const { data: reviews = [], isLoading, isError, error, refetch } = useReviews()
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(1)
+  const { data, isLoading, isError, error, refetch } = useReviews({ page, pageSize: PAGE_SIZE })
+  const reviews = data?.items ?? []
 
   const getErrorMessage = () => {
     if (error instanceof ApiError) return error.getUserMessage()
@@ -29,15 +32,18 @@ export default function ReviewsPage() {
     return "Failed to load code reviews. Please try again."
   }
 
+  // Search filters within the current page only, now that pagination is
+  // real (server-side) rather than a client-side slice of an
+  // over-fetched array — searching "everything" would mean re-fetching
+  // every page, which defeats the point of paginating in the first place.
   const filteredReviews = reviews.filter(
     (rev) =>
       rev.repoName.toLowerCase().includes(search.toLowerCase()) ||
       rev.title.toLowerCase().includes(search.toLowerCase())
   )
 
-  const itemsPerPage = 10
-  const totalPages = Math.ceil(filteredReviews.length / itemsPerPage) || 1
-  const paginatedReviews = filteredReviews.slice((page - 1) * itemsPerPage, page * itemsPerPage)
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE))
+  const paginatedReviews = filteredReviews
 
   return (
     <AppShell>

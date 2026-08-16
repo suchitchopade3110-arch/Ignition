@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app.graph.state import ReviewState, Finding
 from app.rag.vector_store import VectorStore
-from app.services.llm_client import LLMClient
+from app.services.llm_client import get_llm_client
 from app.services.finding_parser import parse_findings_json
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,7 @@ PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_2b_chaos.
 async def agent_2b_chaos(state: ReviewState) -> dict:
     prompt_template = PROMPT_PATH.read_text()
     vector_store = VectorStore()
-    llm = LLMClient()
+    llm = get_llm_client()
 
     try:
         similar_incidents = await vector_store.similar_incidents(
@@ -44,7 +44,7 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
     )
 
     try:
-        raw_response = await llm.complete(prompt)
+        raw_response = await llm.complete(prompt, agent_name="agent_2b_chaos")
         findings = parse_findings_json(raw_response, agent_name="agent_2b_chaos")
     except Exception:
         logger.exception("agent_2b_chaos LLM call failed; reporting no findings")

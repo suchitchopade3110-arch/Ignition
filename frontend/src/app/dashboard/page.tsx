@@ -83,12 +83,13 @@ export default function DashboardPage() {
   } = useDashboardStats()
 
   const {
-    data: reviews = [],
+    data: reviewsData,
     isLoading: isReviewsLoading,
     isError: isReviewsError,
     error: reviewsError,
     refetch: refetchReviews,
-  } = useReviews()
+  } = useReviews({ pageSize: 5 }) // only ever shows 5 most recent — no reason to fetch more
+  const reviews = reviewsData?.items ?? []
 
   const {
     data: repos = [],

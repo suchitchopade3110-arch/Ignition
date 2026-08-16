@@ -26,7 +26,7 @@ from app.graph.verification.symbol_lookup import verify_symbol_exists, SymbolLoo
 from app.graph.scoring import compute_acs, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
-from app.services.llm_client import LLMClient
+from app.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +75,12 @@ async def _generate_narrative(prompt_template: str, verified_findings: list[Find
     if not verified_findings:
         return None
 
-    llm = LLMClient()
+    llm = get_llm_client()
     findings_json = [f.model_dump() for f in verified_findings]
     prompt = prompt_template.format(verified_findings=findings_json)
 
     try:
-        return await llm.complete(prompt, json_mode=False)
+        return await llm.complete(prompt, json_mode=False, agent_name="agent_3_critic_narrative")
     except Exception:
         logger.exception("Critic narrative generation failed; falling back to plain rendering")
         return None

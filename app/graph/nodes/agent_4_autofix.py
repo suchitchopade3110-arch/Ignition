@@ -53,7 +53,11 @@ async def agent_4_autofix(state: ReviewState) -> dict:
         seen_locations.add(loc)
 
     if not resolved_patches:
-        return {}
+        # No patchable findings (or nothing survived conflict resolution).
+        # Still return the full state shape — an empty dict here doesn't
+        # write to any state channel and can surface as None to consumers
+        # of the graph's update stream (see review_pipeline.py).
+        return {"autofix_posted": 0, "autofix_failed": 0}
 
     from app.services.github_client import GitHubClient
 

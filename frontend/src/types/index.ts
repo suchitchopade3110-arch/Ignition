@@ -1,6 +1,13 @@
 export type SeverityLevel = "none" | "low" | "medium" | "high" | "critical"
 export type ReviewStatusType = "queued" | "running" | "paused" | "waiting_hitl" | "completed" | "failed" | "cancelled"
 
+export interface Paginated<T> {
+  items: T[]
+  page: number
+  pageSize: number
+  total: number
+}
+
 export interface Repository {
   id: string
   name: string
