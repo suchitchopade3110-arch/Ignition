@@ -2,15 +2,24 @@
 
 import { useReview } from "@/hooks/queries/use-review"
 import { ReviewDetail } from "@/types"
+import { ApiError } from "@/lib/errors"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { SeverityBadge } from "@/components/ui/severity-badge"
 import { AnimatedAcsScore } from "@/components/ui/animated-acs-score"
 import { AcsScoreRing } from "@/components/ui/acs-score-ring"
+import { ErrorState } from "@/components/ui/error-state"
+import { ReviewDetailSkeleton } from "./review-detail-skeleton"
 import { RegressionBanner } from "./regression-banner"
 import { LiveReviewStream } from "./live-review-stream"
 import { DiffViewer } from "./diff-viewer"
 import { MarkdownPreview } from "./markdown-preview"
 import { GitBranch, Clock, FileDiff, Code, Calendar } from "lucide-react"
+
+function toMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiError) return error.getUserMessage()
+  if (error instanceof Error) return error.message
+  return fallback
+}
 
 export function ReviewDetailView({
   reviewId,
@@ -19,9 +28,27 @@ export function ReviewDetailView({
   reviewId: string
   initialData?: ReviewDetail
 }) {
-  const { data: review = initialData } = useReview(reviewId, initialData)
+  const {
+    data: review = initialData,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useReview(reviewId, initialData)
 
-  if (!review) return null
+  if (isLoading && !review) {
+    return <ReviewDetailSkeleton />
+  }
+
+  if (isError || !review) {
+    return (
+      <ErrorState
+        title="Unable to load this review"
+        message={toMessage(error, "This review could not be found or failed to load.")}
+        onRetry={() => refetch()}
+      />
+    )
+  }
 
   const isRunning = review.status === "running" || review.status === "queued"
 
