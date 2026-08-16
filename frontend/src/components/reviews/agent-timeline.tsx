@@ -1,6 +1,6 @@
 "use client"
 
-import { motion } from "framer-motion"
+import { AnimatePresence, motion } from "framer-motion"
 import { CheckCircle2, Clock, Loader2, XCircle } from "lucide-react"
 import { AgentProgress } from "@/types"
 import { cn } from "@/lib/utils"
@@ -28,7 +28,25 @@ function AgentNode({ agent, isParallel = false }: { agent: AgentProgress; isPara
       )}
     >
       <div className={cn("shrink-0 flex items-center justify-center h-10 w-10 rounded-full border", bg)}>
-        <Icon className={cn("h-5 w-5", className)} />
+        {/*
+         * Keyed on status so a live SSE status change (pending -> running ->
+         * completed/failed) crossfades the icon instead of the instant swap
+         * you get from React just replacing one icon component with another.
+         * MotionConfig's reducedMotion="user" (set app-wide) already strips
+         * the scale for reduced-motion users, leaving only the opacity fade.
+         */}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span
+            key={agent.status}
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ duration: 0.25 }}
+            className="flex items-center justify-center"
+          >
+            <Icon className={cn("h-5 w-5", className)} />
+          </motion.span>
+        </AnimatePresence>
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-foreground truncate">{agent.name}</p>

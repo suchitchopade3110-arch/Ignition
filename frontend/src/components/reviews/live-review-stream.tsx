@@ -1,5 +1,6 @@
 "use client"
 
+import { AnimatePresence, motion } from "framer-motion"
 import { useReviewStream } from "@/hooks/use-review-stream"
 import { ReviewDetail } from "@/types"
 import { AgentTimeline } from "./agent-timeline"
@@ -76,9 +77,28 @@ export function LiveReviewStream({ initialData }: { initialData: ReviewDetail })
                     {agentName}
                   </h3>
                   <div className="space-y-3 pl-2 border-l border-border">
-                    {agentFindings.map((finding) => (
-                      <FindingCard key={finding.id} finding={finding} />
-                    ))}
+                    {/*
+                     * A finding streaming in over SSE gets the same
+                     * opacity/translate entrance AgentTimeline already uses
+                     * for its nodes, instead of popping into the list
+                     * instantly. AnimatePresence only matters here because
+                     * findings arrive one at a time after mount, not for the
+                     * ones already present on first render.
+                     */}
+                    <AnimatePresence initial={false}>
+                      {agentFindings.map((finding) => (
+                        <motion.div
+                          key={finding.id}
+                          layout
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.3 }}
+                        >
+                          <FindingCard finding={finding} />
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
                   </div>
                 </div>
               )
