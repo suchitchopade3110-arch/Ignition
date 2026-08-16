@@ -37,7 +37,7 @@ export function Sidebar({ onClose, showCloseButton = false }: SidebarProps) {
     : "SE"
 
   return (
-    <div className="flex h-full flex-col bg-card/65 backdrop-blur-md border-r border-white/[0.08]">
+    <div className="flex h-full flex-col">
       <div className="flex h-16 shrink-0 items-center justify-between px-6 border-b border-white/[0.06]">
         <Link
           href="/dashboard"

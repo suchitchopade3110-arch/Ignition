@@ -93,8 +93,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AuthGuard>
       <div className="flex h-screen overflow-hidden bg-background bg-ignition-pattern">
-        {/* Desktop Fixed Sidebar */}
-        <div className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 border-r border-white/[0.08] bg-card/65 backdrop-blur-md z-20">
+        {/* Desktop Fixed Sidebar. Sidebar itself stays unstyled (it's also
+            rendered inside the differently-styled mobile drawer below), so
+            the glass surface is painted once, here, not duplicated. */}
+        <div className="glass-sidebar hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 z-20">
           <Sidebar />
         </div>
 
@@ -108,7 +110,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             {/* Backdrop */}
             <div
-              className="fixed inset-0 bg-black/80 backdrop-blur-xs transition-opacity"
+              className="glass-scrim fixed inset-0 transition-opacity"
               onClick={handleCloseDrawer}
               aria-hidden="true"
             />
@@ -126,7 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Main Content Area */}
         <div className="flex flex-col flex-1 md:pl-64 min-w-0">
           {/* Top Navigation */}
-          <header className="h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8 border-b border-white/[0.08] bg-background/70 backdrop-blur-md z-10 sticky top-0 shrink-0 pt-[env(safe-area-inset-top)]">
+          <header className="glass-header h-16 flex items-center justify-between px-4 sm:px-6 lg:px-8 z-10 sticky top-0 shrink-0 pt-[env(safe-area-inset-top)]">
             <div className="flex items-center gap-3">
               {/* Mobile Menu Hamburger Button */}
               <button

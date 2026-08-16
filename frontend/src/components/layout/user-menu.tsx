@@ -84,7 +84,7 @@ export function UserMenu() {
         <div
           role="menu"
           aria-orientation="vertical"
-          className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-white/[0.12] bg-elevated/90 backdrop-blur-lg p-1 shadow-lg shadow-black/30 z-50 animate-in fade-in-50 zoom-in-95 duration-100"
+          className="glass-panel-elevated absolute right-0 top-full mt-2 w-56 rounded-xl p-1 z-50 animate-in fade-in-50 zoom-in-95 duration-100"
         >
           {user && (
             <div className="px-3 py-2.5 border-b border-white/[0.06]">

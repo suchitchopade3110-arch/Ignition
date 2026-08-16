@@ -196,7 +196,7 @@ export function RepositorySettingsDialog({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs"
+            className="glass-scrim fixed inset-0 z-50"
             aria-hidden="true"
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -206,7 +206,7 @@ export function RepositorySettingsDialog({
               aria-modal="true"
               aria-labelledby="repo-settings-title"
               {...dialogMotionProps}
-              className="w-full max-w-md bg-elevated/90 backdrop-blur-lg border border-white/[0.12] rounded-xl overflow-hidden flex flex-col max-h-[90vh] shadow-xl shadow-black/40"
+              className="glass-panel-elevated w-full max-w-md rounded-xl overflow-hidden flex flex-col max-h-[90vh]"
             >
               <div className="flex items-center justify-between p-4 border-b border-white/[0.08] bg-transparent shrink-0">
                 <div className="flex items-center gap-2.5 min-w-0">

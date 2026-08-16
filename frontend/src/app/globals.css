@@ -192,6 +192,12 @@
     border-right: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  /* Dimming scrim behind a modal or drawer, not a panel surface itself */
+  .glass-scrim {
+    background-color: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(4px);
+  }
+
   /*
    * Reduced-transparency fallback.
    * Translucent panels over dense text are the first thing to fail for viewers
@@ -217,6 +223,11 @@
 
     .glass-sidebar {
       background-color: var(--color-card);
+      backdrop-filter: none;
+    }
+
+    .glass-scrim {
+      background-color: rgba(0, 0, 0, 0.92);
       backdrop-filter: none;
     }
   }
