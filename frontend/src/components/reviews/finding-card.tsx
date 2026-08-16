@@ -77,11 +77,11 @@ export function FindingCard({ finding }: { finding: Finding }) {
             <div className="p-4 border-t border-white/[0.06] bg-black/30 space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1 bg-card p-3 rounded-lg border border-white/[0.06]">
-                  <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rule Violated</h4>
+                  <h4 className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Rule Violated</h4>
                   <p className="text-xs text-foreground font-mono">{finding.rule}</p>
                 </div>
                 <div className="space-y-1 bg-card p-3 rounded-lg border border-white/[0.06]">
-                  <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Recommendation</h4>
+                  <h4 className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Recommendation</h4>
                   <p className="text-xs text-foreground">{finding.recommendation}</p>
                 </div>
               </div>
@@ -89,7 +89,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
               {finding.suggestedFix && (
                 <div className="space-y-2 pt-2">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Suggested Fix</h4>
+                    <h4 className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Suggested Fix</h4>
                     <button
                       type="button"
                       onClick={handleCopy}

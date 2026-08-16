@@ -206,7 +206,7 @@ export default function ReviewsPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1 min-w-0 flex-1">
-                        <span className="text-[11px] font-mono tabular-nums text-muted-foreground block truncate">
+                        <span className="text-caption font-mono tabular-nums text-muted-foreground block truncate">
                           {review.repoName} #{review.pullRequestNumber}
                         </span>
                         <h3 className="font-semibold text-foreground text-sm line-clamp-2 hover:text-primary transition-colors">
@@ -228,7 +228,7 @@ export default function ReviewsPage() {
                         <StatusBadge status={review.status} />
                         <SeverityBadge level={review.severity} />
                       </div>
-                      <div className="flex items-center gap-3 text-muted-foreground text-[11px] font-mono tabular-nums">
+                      <div className="flex items-center gap-3 text-muted-foreground text-caption font-mono tabular-nums">
                         {review.duration && (
                           <span className="flex items-center gap-1">
                             <ClockIcon className="h-3 w-3" />

@@ -135,7 +135,7 @@ export default function RepositoriesPage() {
                         </TableCell>
                         <TableCell className="text-muted-foreground py-3 text-xs">{repo.owner}</TableCell>
                         <TableCell className="py-3">
-                          <span className="inline-flex items-center rounded bg-secondary/70 px-2 py-0.5 text-[10px] font-semibold text-secondary-foreground border border-white/[0.06]">
+                          <span className="inline-flex items-center rounded bg-secondary/70 px-2 py-0.5 text-caption font-semibold text-secondary-foreground border border-white/[0.06]">
                             {repo.language.toLowerCase()}
                           </span>
                         </TableCell>
@@ -192,7 +192,7 @@ export default function RepositoriesPage() {
                     </div>
 
                     <div className="flex items-center justify-between gap-2 pt-1">
-                      <span className="inline-flex items-center rounded bg-secondary/70 px-2.5 py-1 text-[11px] font-semibold text-secondary-foreground border border-white/[0.06]">
+                      <span className="inline-flex items-center rounded bg-secondary/70 px-2.5 py-1 text-caption font-semibold text-secondary-foreground border border-white/[0.06]">
                         {repo.language}
                       </span>
                       <div className="flex items-center gap-2">

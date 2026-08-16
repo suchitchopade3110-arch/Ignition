@@ -89,7 +89,7 @@ export function UserMenu() {
           {user && (
             <div className="px-3 py-2.5 border-b border-white/[0.06]">
               <p className="text-xs font-semibold text-foreground truncate">{user.name || user.login}</p>
-              <p className="text-[11px] font-mono text-muted-foreground truncate">@{user.login}</p>
+              <p className="text-caption font-mono text-muted-foreground truncate">@{user.login}</p>
             </div>
           )}
 

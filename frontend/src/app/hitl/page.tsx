@@ -111,18 +111,18 @@ export default function HitlPage() {
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-black/30 p-3 sm:p-4 rounded-lg border border-white/[0.04] font-mono tabular-nums">
                     <div className="space-y-1">
-                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Critical Issues</p>
+                      <p className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Critical Issues</p>
                       <p className="text-sm sm:text-base font-extrabold text-critical flex items-center gap-1.5">
                         <ShieldAlert className="h-4 w-4 shrink-0" />
                         {item.findingsCount}
                       </p>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">ACS Score</p>
+                      <p className="text-caption font-bold text-muted-foreground uppercase tracking-wider">ACS Score</p>
                       <p className="text-sm sm:text-base font-extrabold text-foreground">{item.acsScore}</p>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Changes</p>
+                      <p className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Changes</p>
                       <p className="text-xs font-bold text-foreground mt-0.5">
                         <span className="text-success">+{item.linesAdded}</span>
                         <span className="text-muted-foreground/30 px-1">/</span>
@@ -130,7 +130,7 @@ export default function HitlPage() {
                       </p>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Waiting Since</p>
+                      <p className="text-caption font-bold text-muted-foreground uppercase tracking-wider">Waiting Since</p>
                       <p className="text-xs font-semibold text-foreground flex items-center gap-1.5 mt-0.5">
                         <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                         {new Date(item.waitingSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

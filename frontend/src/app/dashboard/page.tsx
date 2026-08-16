@@ -181,7 +181,7 @@ export default function DashboardPage() {
                           <span className="text-sm font-medium text-foreground truncate">
                             {review.repoName}
                           </span>
-                          <span className="text-[10px] font-mono text-muted-foreground">
+                          <span className="text-caption font-mono text-muted-foreground">
                             #{review.pullRequestNumber}
                           </span>
                         </div>
