@@ -34,7 +34,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
   return (
     <div
       className={cn(
-        "rounded-xl border border-white/[0.08] bg-card/60 backdrop-blur-md overflow-hidden transition-colors duration-200 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]",
+        "rounded-xl border border-white/[0.08] bg-card overflow-hidden transition-colors duration-200 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]",
         borderHoverClass,
         expanded && "border-white/[0.12]"
       )}

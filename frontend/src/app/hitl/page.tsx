@@ -59,7 +59,7 @@ export default function HitlPage() {
       />
 
       {isLoading ? (
-        <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-6 mt-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+        <div className="bg-card border border-white/[0.08] rounded-xl p-6 mt-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
           <TableSkeleton rows={4} />
         </div>
       ) : isError ? (
@@ -71,7 +71,7 @@ export default function HitlPage() {
           />
         </div>
       ) : items.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl mt-6 px-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+        <div className="flex flex-col items-center justify-center py-20 text-center bg-card border border-white/[0.08] rounded-xl mt-6 px-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
           <div className="bg-success/10 border border-success/30 p-4 rounded-full mb-4">
             <Check className="h-8 w-8 text-success" />
           </div>
@@ -88,7 +88,7 @@ export default function HitlPage() {
             return (
               <div
                 key={item.id}
-                className="flex flex-col lg:flex-row gap-6 p-4 sm:p-6 bg-card/60 backdrop-blur-md border border-white/[0.08] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] rounded-xl transition-colors hover:border-white/[0.12] relative overflow-hidden group"
+                className="flex flex-col lg:flex-row gap-6 p-4 sm:p-6 bg-card border border-white/[0.08] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] rounded-xl transition-colors hover:border-white/[0.12] relative overflow-hidden group"
               >
                 {/* Highlight bar on left based on severity */}
                 <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-warning/80" />

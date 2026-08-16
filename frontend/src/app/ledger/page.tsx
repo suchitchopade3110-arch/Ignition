@@ -108,7 +108,7 @@ export default function LedgerPage() {
               value={selectedRepo}
               onChange={(e) => setSelectedRepo(e.target.value)}
               aria-label="Select repository for ledger analysis"
-              className="appearance-none w-full sm:w-64 min-h-[44px] bg-card/60 backdrop-blur-md border border-white/[0.08] text-foreground text-xs font-semibold rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary block p-2.5 pr-10 transition-colors hover:border-white/[0.12] cursor-pointer shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
+              className="appearance-none w-full sm:w-64 min-h-[44px] bg-card border border-white/[0.08] text-foreground text-xs font-semibold rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary block p-2.5 pr-10 transition-colors hover:border-white/[0.12] cursor-pointer shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]"
             >
               {repos.map((r) => (
                 <option key={r.id} value={`${r.owner}/${r.name}`} className="bg-card text-foreground">
@@ -125,10 +125,10 @@ export default function LedgerPage() {
         <div className="space-y-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
             {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-6 h-24 animate-pulse" />
+              <div key={i} className="bg-card border border-white/[0.08] rounded-xl p-6 h-24 animate-pulse" />
             ))}
           </div>
-          <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-6 h-[380px] animate-pulse" />
+          <div className="bg-card border border-white/[0.08] rounded-xl p-6 h-[380px] animate-pulse" />
         </div>
       ) : isError ? (
         <div className="py-6">
@@ -142,28 +142,28 @@ export default function LedgerPage() {
         <>
           {stats && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-              <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
+              <div className="bg-card border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
                 <div className="flex items-center gap-2 mb-2">
                   <Activity className="h-4 w-4 text-primary" />
                   <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Average ACS</p>
                 </div>
                 <p className="text-2xl font-extrabold text-foreground font-mono tabular-nums">{stats.averageAcs}</p>
               </div>
-              <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
+              <div className="bg-card border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
                 <div className="flex items-center gap-2 mb-2">
                   <GitCommit className="h-4 w-4 text-success" />
                   <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Total Reviews</p>
                 </div>
                 <p className="text-2xl font-extrabold text-foreground font-mono tabular-nums">{stats.totalReviews}</p>
               </div>
-              <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
+              <div className="bg-card border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
                 <div className="flex items-center gap-2 mb-2">
                   <ShieldAlert className="h-4 w-4 text-critical" />
                   <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Critical Findings</p>
                 </div>
                 <p className="text-2xl font-extrabold text-foreground font-mono tabular-nums">{stats.criticalFindings}</p>
               </div>
-              <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
+              <div className="bg-card border border-white/[0.08] rounded-xl p-5 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors">
                 <div className="flex items-center gap-2 mb-2">
                   <TrendingDown className="h-4 w-4 text-warning" />
                   <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Active Regressions</p>
@@ -174,7 +174,7 @@ export default function LedgerPage() {
           )}
 
           {trend.length > 0 && (
-            <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-4 sm:p-6 mb-8 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+            <div className="bg-card border border-white/[0.08] rounded-xl p-4 sm:p-6 mb-8 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <h3 className="text-xs font-bold uppercase tracking-wider text-foreground mb-6 border-b border-white/[0.06] pb-3">
                 ACS Trend Line
               </h3>
@@ -208,7 +208,7 @@ export default function LedgerPage() {
           )}
 
           {trend.length > 0 && (
-            <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl p-4 sm:p-6 mb-8 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+            <div className="bg-card border border-white/[0.08] rounded-xl p-4 sm:p-6 mb-8 overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <h3 className="text-xs font-bold uppercase tracking-wider text-foreground mb-6 border-b border-white/[0.06] pb-3">
                 Critical Findings vs Total Reviews
               </h3>
@@ -250,7 +250,7 @@ export default function LedgerPage() {
 
           {/* Historical Review List */}
           {reviews.length > 0 && (
-            <div className="bg-card/60 backdrop-blur-md border border-white/[0.08] rounded-xl overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+            <div className="bg-card border border-white/[0.08] rounded-xl overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
               <h3 className="text-xs font-bold uppercase tracking-wider text-foreground p-6 border-b border-white/[0.06] pb-3 bg-white/[0.02]">
                 Historical Reviews
               </h3>

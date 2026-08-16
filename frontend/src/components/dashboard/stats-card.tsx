@@ -15,7 +15,7 @@ interface StatsCardProps {
 
 export function StatsCard({ title, value, description, icon: Icon, trend }: StatsCardProps) {
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-card/60 backdrop-blur-md p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors flex flex-col">
+    <div className="rounded-xl border border-white/[0.08] bg-card p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors flex flex-col">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-muted-foreground">{title}</h3>
         <Icon className="h-4 w-4 text-muted-foreground" />

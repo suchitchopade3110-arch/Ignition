@@ -59,7 +59,7 @@ export default function ReviewsPage() {
         </div>
       </div>
 
-      <div className="bg-card/60 backdrop-blur-md rounded-xl border border-white/[0.08] overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
+      <div className="bg-card rounded-xl border border-white/[0.08] overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)]">
         {isLoading ? (
           <div className="p-6">
             <TableSkeleton rows={8} />

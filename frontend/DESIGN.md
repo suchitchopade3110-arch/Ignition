@@ -17,14 +17,7 @@ electric-blue/emerald default), hairline low-opacity borders, mono reserved for 
 glass on working surfaces — this is an app people stare at diffs and findings in, not a media
 showcase.
 
-> **Open decision.** This section states flat-with-hairlines and forbids glass on data surfaces.
-> The shipped dashboard does use glass (`backdrop-blur` on stats cards and panels) and a
-> `.glass-panel` / `.glass-sidebar` / `.glass-header` utility set exists in `globals.css`. The
-> `prefers-reduced-transparency` fallback that glass requires is now implemented, so the shipped
-> version is at least accessible. Spec and implementation still disagree on intent: either relax
-> this section to permit glass on app panels, or strip glass back to the nav and modals. Pick one.
-
-**Morphism decision: flat with hairline depth, not glassmorphism.**
+**Morphism decision: flat with hairline depth, not glassmorphism. Resolved and implemented.**
 - Glassmorphism is explicitly wrong for dashboards: `backdrop-filter` panels read as decorative
   once the screen is full of diffs and findings, and blur tanks contrast on dense text.
 - Default treatment everywhere in the app shell: flat surfaces + hairline borders at low opacity
@@ -210,17 +203,24 @@ Done:
   disagreed (`text-base` vs `text-lg`) and the outlier final-CTA h2 that was larger than the
   other four section headers for no stated reason.
 
+- Glass removed from every data-bearing surface (stats cards, finding cards, dashboard panels,
+  the reviews table, HITL cards, ledger cards and skeletons, repo cards): `bg-card/60
+  backdrop-blur-md` -> `bg-card`, 19 call sites across 7 files. Glass stays where the spec always
+  allowed it: the top nav, the sidebar, the mobile drawer overlay, the settings dialog, the user
+  menu dropdown, and the single login card.
+
 Outstanding:
 
-1. Resolve the glass open decision at the top of this document.
-2. Caption-scale consolidation. Three arbitrary micro sizes (`text-[9px]` / `text-[10px]` /
+1. Caption-scale consolidation. Three arbitrary micro sizes (`text-[9px]` / `text-[10px]` /
    `text-[11px]`) are still spread across 14 files for badges, timestamps and metadata. Left
    alone deliberately: several sit inside tightly-padded pills where a size change risks text
    overflow, and there is no visual-diff tooling in place to verify 14 files' worth of badges
    without a manual pass. Worth a dedicated pass with screenshots per surface, not a blind sweep.
-3. Footer placeholder links. Pricing, Privacy, Terms, Security, Changelog and Status all point at
+2. Footer placeholder links. Pricing, Privacy, Terms, Security, Changelog and Status all point at
    `/login` or `/dashboard` because the destination pages do not exist.
-4. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
-5. Extend spring easing from the hero into dashboard state transitions.
-6. De-duplicate the inline glass classes in the dashboard against the `.glass-panel` utility,
-   once the glass decision is settled.
+3. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
+4. Extend spring easing from the hero into dashboard state transitions.
+5. Delete the now-unused `.glass-panel` / `.glass-panel-subtle` / `.glass-panel-elevated`
+   utilities from `globals.css` if nothing ends up using them, or apply them to the surfaces
+   that are still legitimately glass (nav, sidebar, dialog, dropdown) instead of the ad hoc
+   inline classes those currently carry.

@@ -16,7 +16,7 @@ import { ErrorState } from "@/components/ui/error-state"
 import { ApiError } from "@/lib/errors"
 
 const PANEL_CLASS =
-  "border border-white/[0.08] bg-card/60 backdrop-blur-md rounded-xl overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] flex flex-col"
+  "border border-white/[0.08] bg-card rounded-xl overflow-hidden shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] flex flex-col"
 
 function toMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiError) return error.getUserMessage()
@@ -133,7 +133,7 @@ export default function DashboardPage() {
               icon={ShieldAlert}
               description="Requires human approval"
             />
-            <div className="rounded-xl border border-white/[0.08] bg-card/60 backdrop-blur-md p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors flex flex-col justify-between">
+            <div className="rounded-xl border border-white/[0.08] bg-card p-6 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.03)] hover:border-white/[0.12] transition-colors flex flex-col justify-between">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-sm font-medium text-muted-foreground">Avg ACS Score</h3>
                 <Activity className="h-4 w-4 text-muted-foreground" />
