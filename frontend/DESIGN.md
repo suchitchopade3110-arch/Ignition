@@ -219,15 +219,18 @@ Done:
   They render as inert "Soon" text instead of live navigation to `/login` or `/dashboard`.
 - SSE-driven agent status changes and finding arrivals now animate (crossfade / opacity+y entrance)
   instead of popping in instantly, riding the existing `MotionConfig reducedMotion="user"` provider.
+- Caption-scale consolidated. Added `--text-caption` (11px) and replaced `text-[10px]` /
+  `text-[11px]` at 19 sites across 9 real-app files (dashboard, HITL, ledger, repos, reviews,
+  `agent-timeline`, `finding-card`, `diff-viewer`, `user-menu`). Several were the same element at
+  two different sizes purely from desktop-table vs mobile-card duplication, with no reason for the
+  split. Verified with live overflow measurement (`scrollWidth` vs `clientWidth`) at 1000px and
+  375px on every site, including the diff-viewer's fixed 40px gutter — the highest-risk one.
+  Deliberately excluded: `hero-product-console.tsx` (a self-contained decorative landing mockup
+  with its own intentional 9/10/11px density hierarchy) and the footer's one-off "Soon" badge.
 
 Outstanding:
 
-1. Caption-scale consolidation. Three arbitrary micro sizes (`text-[9px]` / `text-[10px]` /
-   `text-[11px]`) are still spread across 14 files for badges, timestamps and metadata. Left
-   alone deliberately: several sit inside tightly-padded pills where a size change risks text
-   overflow, and this session's screenshot compositing was intermittently unavailable, which is
-   exactly the eyes-on per-surface verification this item needs before touching 14 files of tight
-   badges. Worth a dedicated pass with reliable screenshots, not a blind sweep or a DOM-only check.
-2. Real footer destinations. The six items above need actual pages once they exist, or the "Soon"
-   treatment can stay indefinitely if that's the intended posture.
-3. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
+1. Real footer destinations. Terms/Privacy/Security/Pricing/Changelog/Status render as inert "Soon"
+   text now instead of linking to the wrong page. They need actual pages once they exist, or the
+   "Soon" treatment can stay indefinitely if that's the intended posture.
+2. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
