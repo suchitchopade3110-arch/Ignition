@@ -15,16 +15,25 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request, Depends, HTTPException, APIRouter, BackgroundTasks
+from fastapi import FastAPI, Request, Response, Depends, HTTPException, APIRouter, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from postgrest.exceptions import APIError
 
 from app.config import get_settings
 from app.security import verify_github_signature
 from app.schemas.github import PullRequestWebhook
-from app.services.ast_client import ASTClient
-from app.graph.workflow import build_graph
-from app.graph.state import ReviewState, Finding as GraphFinding
+from app.services.redis_client import get_arq_pool
+from app.services.review_pipeline import review_repo, repo_repo
+from app.auth import (
+    router as auth_router,
+    get_current_user,
+    require_repo_full_name_access,
+    require_repo_id_access,
+    require_review_repo_access,
+    check_repo_access,
+    AuthUser,
+)
 
 # Import dashboard schemas & repositories
 from app.schemas.dashboard import (
@@ -37,480 +46,73 @@ from app.schemas.dashboard import (
     LedgerStats,
     LedgerTrend,
     SseEventPayload,
-    User,
     Paginated,
 )
-from app.repositories.dashboard import ReviewRepository, RepoRepository
 from app.services.stream_manager import stream_manager
+from app.services.logging_config import configure_logging, set_correlation_id
+from app.services.health_checks import run_health_checks
+from app.services.llm_client import get_llm_client
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Ignition")
 
-# Enable CORS for the Next.js dev server
+settings = get_settings()
+# Constructed once here, at module import (same lifecycle as ast_client/
+# graph in app/services/review_pipeline.py) — /healthz's LLM reachability
+# check (app/services/health_checks.py) is this process's only caller, but
+# it should still be the one shared instance, not a fresh AsyncGroq per
+# health-check poll.
+get_llm_client()
+
+# Pagination bounds for /api/reviews and /api/repos/{repo_full_name}/reviews
+# — the only two endpoints that had a hardcoded page_size=1000 before this.
+# FastAPI's Query(ge=..., le=...) rejects (422) anything outside these
+# bounds outright, rather than silently clamping — consistent with this
+# project's "fail loudly" pattern elsewhere (Phase 1 auth, Phase 2 webhook
+# dedupe) rather than quietly under-serving what was actually asked for.
+DEFAULT_PAGE_SIZE = 25
+MAX_PAGE_SIZE = 100
+
+# Origins driven by ALLOWED_ORIGINS (comma-separated; see app/config.py) —
+# falls back to the local dev origin only when unset. Everything else
+# about the policy (credentials/methods/headers) is untouched.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-settings = get_settings()
-ast_client = ASTClient(base_url=settings.ast_service_url)
-graph = build_graph()
-
-review_repo = ReviewRepository()
-repo_repo = RepoRepository()
-
-
-def parse_diff(diff_text: str) -> tuple[int, int, int, list[dict]]:
-    """
-    Parses unified diff text to extract changed files count,
-    additions, deletions, and structured file diffs.
-    """
-    if not diff_text:
-        return 0, 0, 0, []
-
-    files_changed = 0
-    lines_added = 0
-    lines_deleted = 0
-    diffs = []
-
-    current_file = None
-    current_content = []
-    file_additions = 0
-    file_deletions = 0
-
-    for line in diff_text.splitlines():
-        if line.startswith("diff --git"):
-            if current_file:
-                diffs.append({
-                    "file": current_file,
-                    "additions": file_additions,
-                    "deletions": file_deletions,
-                    "content": "\n".join(current_content),
-                })
-            current_file = None
-            current_content = []
-            file_additions = 0
-            file_deletions = 0
-            files_changed += 1
-        elif line.startswith("--- a/"):
-            pass
-        elif line.startswith("+++ b/"):
-            current_file = line[6:]
-            if current_file.startswith("b/"):
-                current_file = current_file[2:]
-        elif line.startswith("@@"):
-            current_content.append(line)
-        elif line.startswith("+") and not line.startswith("+++"):
-            lines_added += 1
-            file_additions += 1
-            current_content.append(line)
-        elif line.startswith("-") and not line.startswith("---"):
-            lines_deleted += 1
-            file_deletions += 1
-            current_content.append(line)
-        else:
-            current_content.append(line)
-
-    if current_file:
-        diffs.append({
-            "file": current_file,
-            "additions": file_additions,
-            "deletions": file_deletions,
-            "content": "\n".join(current_content),
-        })
-
-    return files_changed, lines_added, lines_deleted, diffs
-
-
-async def run_review_stream_task(event: PullRequestWebhook, review_id: str):
-    """
-    Asynchronous background task to fetch PR diff metadata, execute
-    the LangGraph state machine, persist transitions to Supabase, and
-    stream progress events to active subscribers.
-    """
-    logger.info("Starting background review for ID %s", review_id)
-
-    # 1. Reconstruct pull request info from GitHub Integration
-    title = f"PR #{event.pull_request.number}"
-    author = "unknown"
-    branch = "main"
-    gh = None
-
-    try:
-        from app.services.github_client import GitHubClient
-        gh = GitHubClient(installation_id=event.installation.id)
-        pr = gh._client.get_repo(event.repository.full_name).get_pull(event.pull_request.number)
-        title = pr.title
-        author = pr.user.login
-        branch = pr.head.ref
-    except Exception as e:
-        logger.exception("Failed to fetch PR info from GitHub API: %s", e)
-
-    # Fetch Unified Diff
-    diff_text = ""
-    files_changed = 0
-    lines_added = 0
-    lines_deleted = 0
-    parsed_diffs = []
-
-    if gh:
-        try:
-            diff_text = gh.get_pr_diff(event.repository.full_name, event.pull_request.number)
-            files_changed, lines_added, lines_deleted, parsed_diffs = parse_diff(diff_text)
-        except Exception as e:
-            logger.exception("Failed to fetch PR diff: %s", e)
-
-    # Determine previous ACS score for regression tracking
-    previous_acs_score = 100.0
-    try:
-        latest_completed_res = (
-            review_repo._db.table("reviews")
-            .select("acs_score")
-            .eq("repo_full_name", event.repository.full_name)
-            .eq("status", "completed")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if latest_completed_res.data and latest_completed_res.data[0].get("acs_score") is not None:
-            previous_acs_score = float(latest_completed_res.data[0]["acs_score"])
-    except Exception as e:
-        logger.warning("Could not query baseline review: %s", e)
-
-    # Save initial metadata
-    review_repo.update_review(
-        review_id,
-        {
-            "status": "running",
-            "title": title,
-            "author": author,
-            "branch": branch,
-            "diff_text": diff_text,
-            "previous_acs_score": previous_acs_score,
-            "diffs": parsed_diffs,
-        },
-    )
-
-    # Signal review start
-    await stream_manager.publish(
-        review_id,
-        {
-            "type": "review.started",
-            "reviewId": review_id,
-            "status": "running",
-        },
-    )
-
-    # Setup progress trackers for parallel agents
-    agents_progress = {
-        "agent_1_gate": {
-            "id": "agent_1_gate",
-            "name": "Deterministic Rule Gate",
-            "status": "running",
-            "findingCount": 0,
-        },
-        "agent_2a_struct": {
-            "id": "agent_2a_struct",
-            "name": "Architecture Auditor",
-            "status": "pending",
-            "findingCount": 0,
-        },
-        "agent_2b_chaos": {
-            "id": "agent_2b_chaos",
-            "name": "Logic & Chaos Specialist",
-            "status": "pending",
-            "findingCount": 0,
-        },
-        "agent_2c_security": {
-            "id": "agent_2c_security",
-            "name": "Security Auditor",
-            "status": "pending",
-            "findingCount": 0,
-        },
-        "agent_3_critic": {
-            "id": "agent_3_critic",
-            "name": "Critic & Synthesizer",
-            "status": "pending",
-            "findingCount": 0,
-        },
-        "agent_4_autofix": {
-            "id": "agent_4_autofix",
-            "name": "Auto-Fix Generator",
-            "status": "pending",
-            "findingCount": 0,
-        },
-    }
-
-    review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
-    await stream_manager.publish(
-        review_id,
-        {
-            "type": "agent.started",
-            "reviewId": review_id,
-            "agentId": "agent_1_gate",
-        },
-    )
-
-    try:
-        # 2. Build Graph State
-        ast_payload = await ast_client.analyze_git(
-            repo_full_name=event.repository.full_name,
-            pr_number=event.pull_request.number,
-            clone_url=event.repository.clone_url,
-            ref=event.pull_request.head_sha,
-            base_ref=event.pull_request.base_sha,
-        )
-
-        initial_state = ReviewState.from_ast_payload(ast_payload, event)
-        initial_state.diff_text = diff_text
-
-        # 3. Stream graph steps
-        async for state_update in graph.astream(initial_state):
-            for node_name, node_output in state_update.items():
-                if node_name == "agent_1_gate":
-                    violation = node_output.get("hard_rule_violation", False)
-                    agents_progress["agent_1_gate"]["status"] = "completed"
-                    agents_progress["agent_1_gate"]["findingCount"] = 1 if violation else 0
-
-                    review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "agent.completed",
-                            "reviewId": review_id,
-                            "agentId": "agent_1_gate",
-                            "findingCount": 1 if violation else 0,
-                        },
-                    )
-
-                    if not violation:
-                        # Fan out parallel specialists
-                        for agent_id in ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]:
-                            agents_progress[agent_id]["status"] = "running"
-                            await stream_manager.publish(
-                                review_id,
-                                {
-                                    "type": "agent.started",
-                                    "reviewId": review_id,
-                                    "agentId": agent_id,
-                                },
-                            )
-                        review_repo.update_review(
-                            review_id, {"agents": list(agents_progress.values())}
-                        )
-
-                elif node_name in ("agent_2a_struct", "agent_2b_chaos", "agent_2c_security"):
-                    findings = node_output.get("findings", [])
-                    agents_progress[node_name]["status"] = "completed"
-                    agents_progress[node_name]["findingCount"] = len(findings)
-
-                    review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "agent.completed",
-                            "reviewId": review_id,
-                            "agentId": node_name,
-                            "findingCount": len(findings),
-                        },
-                    )
-
-                    # Trigger Critic if specialists are done
-                    if (
-                        agents_progress["agent_2a_struct"]["status"] == "completed"
-                        and agents_progress["agent_2b_chaos"]["status"] == "completed"
-                        and agents_progress["agent_2c_security"]["status"] == "completed"
-                        and agents_progress["agent_3_critic"]["status"] == "pending"
-                    ):
-                        agents_progress["agent_3_critic"]["status"] = "running"
-                        review_repo.update_review(
-                            review_id, {"agents": list(agents_progress.values())}
-                        )
-                        await stream_manager.publish(
-                            review_id,
-                            {
-                                "type": "critic.started",
-                                "reviewId": review_id,
-                            },
-                        )
-
-                elif node_name == "agent_3_critic":
-                    agents_progress["agent_3_critic"]["status"] = "completed"
-                    verified = node_output.get("verified_findings", [])
-                    findings_count = len(verified)
-                    agents_progress["agent_3_critic"]["findingCount"] = findings_count
-
-                    acs_score = node_output.get("acs_score")
-                    hitl_severity = node_output.get("hitl_severity", "none")
-                    is_regression = node_output.get("is_regression", False)
-                    final_comment = node_output.get("final_comment_markdown")
-
-                    # Map verified findings to schema format
-                    mapped_findings = []
-                    for idx, f in enumerate(verified):
-                        mapped_findings.append({
-                            "id": f"{review_id}-finding-{idx}",
-                            "agentId": f.agent,
-                            "severity": f.severity,
-                            "file": f.file_path,
-                            "line": f.line,
-                            "description": f.description,
-                            "rule": f.agent.replace("_", " ").title(),
-                            "recommendation": f.description,
-                            "suggestedFix": f.suggested_patch,
-                        })
-
-                    regression_alert = {
-                        "isRegression": is_regression,
-                        "ruleRegressed": "ACS Score Drop" if is_regression else None,
-                        "previousScore": previous_acs_score,
-                        "currentScore": acs_score,
-                        "impact": "Code quality dropped below baseline" if is_regression else None,
-                        "recommendation": "Review security or architecture findings"
-                        if is_regression
-                        else None,
-                    }
-
-                    review_repo.update_review(
-                        review_id,
-                        {
-                            "agents": list(agents_progress.values()),
-                            "acs_score": acs_score,
-                            "hitl_severity": hitl_severity,
-                            "findings": mapped_findings,
-                            "findings_count": findings_count,
-                            "final_comment_markdown": final_comment,
-                            "regression": regression_alert,
-                            "severity": hitl_severity,
-                        },
-                    )
-
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "critic.completed",
-                            "reviewId": review_id,
-                            "acsScore": acs_score,
-                        },
-                    )
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "acs.updated",
-                            "reviewId": review_id,
-                            "acsScore": acs_score,
-                        },
-                    )
-                    if is_regression:
-                        await stream_manager.publish(
-                            review_id,
-                            {
-                                "type": "regression.detected",
-                                "reviewId": review_id,
-                            },
-                        )
-
-                elif node_name == "pause_for_human_approval":
-                    review_repo.update_review(review_id, {"status": "waiting_hitl"})
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "waiting.hitl",
-                            "reviewId": review_id,
-                            "status": "waiting_hitl",
-                        },
-                    )
-
-                elif node_name == "agent_4_autofix":
-                    agents_progress["agent_4_autofix"]["status"] = "completed"
-                    posted = node_output.get("autofix_posted", 0)
-                    failed = node_output.get("autofix_failed", 0)
-                    agents_progress["agent_4_autofix"]["findingCount"] = posted
-
-                    review_repo.update_review(
-                        review_id,
-                        {
-                            "agents": list(agents_progress.values()),
-                            "autofix_posted": posted,
-                            "autofix_failed": failed,
-                        },
-                    )
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "agent.completed",
-                            "reviewId": review_id,
-                            "agentId": "agent_4_autofix",
-                            "findingCount": posted,
-                        },
-                    )
-
-                elif node_name == "finalize_and_post":
-                    review_repo.update_review(review_id, {"status": "completed"})
-
-                    # Update Repository baseline stats
-                    db_rev = review_repo.get_review(review_id)
-                    final_acs = db_rev.get("acs_score") if db_rev else 100.0
-                    repo_repo.update_repo_stats(
-                        repo_full_name=event.repository.full_name,
-                        acs_score=final_acs,
-                        last_review_at=datetime.utcnow().isoformat() + "Z",
-                    )
-
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "review.completed",
-                            "reviewId": review_id,
-                            "status": "completed",
-                        },
-                    )
-
-                elif node_name == "direct_rejection":
-                    review_repo.update_review(
-                        review_id,
-                        {
-                            "status": "completed",  # or rejected
-                            "final_comment_markdown": node_output.get("final_comment_markdown"),
-                        },
-                    )
-                    await stream_manager.publish(
-                        review_id,
-                        {
-                            "type": "review.completed",
-                            "reviewId": review_id,
-                            "status": "completed",
-                        },
-                    )
-
-    except Exception as exc:
-        logger.exception("LangGraph execution failed: %s", exc)
-        review_repo.update_review(review_id, {"status": "failed"})
-        await stream_manager.publish(
-            review_id,
-            {
-                "type": "review.failed",
-                "reviewId": review_id,
-                "status": "failed",
-            },
-        )
+# review_repo / repo_repo are imported from app.services.review_pipeline
+# above rather than constructed here — that module is the one source of
+# truth now that review execution happens in the Arq worker process
+# (app/worker.py), not inside this FastAPI process.
 
 
 @app.post("/webhooks/github", status_code=202)
 async def github_webhook(request: Request, _: None = Depends(verify_github_signature)):
     payload = await request.json()
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+
+    # Correlation ID: X-GitHub-Delivery when present (ties the log trace
+    # back to GitHub's own delivery record), a fresh UUID as a fallback for
+    # requests that somehow lack it (a hand-crafted test payload, mainly —
+    # every real GitHub webhook sends this header). Set as early as
+    # possible so even the malformed-payload rejection below is traceable.
+    correlation_id = delivery_id or str(uuid.uuid4())
+    set_correlation_id(correlation_id)
+    logger.info("Webhook received", extra={"delivery_id": delivery_id})
 
     try:
         event = PullRequestWebhook.model_validate(payload)
     except Exception as exc:
+        logger.warning("Malformed webhook payload rejected", extra={"error": str(exc)})
         raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {exc}")
 
     if event.action not in {"opened", "synchronize", "reopened"}:
+        logger.info("Webhook action ignored", extra={"action": event.action})
         return {"status": "ignored", "action": event.action}
 
     review_id = str(uuid.uuid4())
@@ -518,25 +120,82 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # Ensure repository is registered
     repo_repo.get_or_create_repo(event.repository.full_name)
 
-    # Insert baseline review row
-    review_repo.create_review(
-        review_id=review_id,
-        repo_full_name=event.repository.full_name,
-        pr_number=event.pull_request.number,
-        title=f"PR #{event.pull_request.number}",
-        author="unknown",
-        branch="main",
-        commit_sha=event.pull_request.head_sha,
-    )
+    # Idempotency: a duplicate delivery for the same (repo, PR, head commit)
+    # must not spawn a second LangGraph run. Enforced as a DB-level unique
+    # constraint (migrations_004_webhook_dedupe.sql) on
+    # (repo_full_name, pr_number, commit_sha) rather than an app-level
+    # check-then-insert, so two deliveries racing each other are still
+    # serialized correctly by Postgres instead of both slipping past an
+    # app-side check. This runs BEFORE the Arq job enqueue below — the
+    # whole point is to stop the second run from starting at all, not to
+    # detect and clean up after two runs already kicked off.
+    try:
+        review_repo.create_review(
+            review_id=review_id,
+            repo_full_name=event.repository.full_name,
+            pr_number=event.pull_request.number,
+            title=f"PR #{event.pull_request.number}",
+            author="unknown",
+            branch="main",
+            commit_sha=event.pull_request.head_sha,
+            installation_id=event.installation.id,
+            correlation_id=correlation_id,
+        )
+    except APIError as exc:
+        if exc.code == "23505" or "duplicate key" in (exc.message or "").lower():
+            existing = review_repo.get_review_by_repo_pr_sha(
+                repo_full_name=event.repository.full_name,
+                pr_number=event.pull_request.number,
+                commit_sha=event.pull_request.head_sha,
+            )
+            # This delivery's own correlation_id already covers the log
+            # lines up to this point; switch to the ORIGINAL review's
+            # correlation_id for this line specifically so it's
+            # discoverable from either delivery's trace.
+            if existing and existing.get("correlation_id"):
+                set_correlation_id(existing["correlation_id"])
+            logger.info(
+                "Duplicate webhook delivery ignored",
+                extra={
+                    "delivery_id": delivery_id,
+                    "repo_full_name": event.repository.full_name,
+                    "pr_number": event.pull_request.number,
+                    "head_sha": event.pull_request.head_sha,
+                    "existing_review_id": existing["id"] if existing else None,
+                },
+            )
+            return {
+                "status": "duplicate",
+                "reviewId": existing["id"] if existing else None,
+                "detail": "A review for this repo/PR/head_sha already exists; no new run was started.",
+            }
+        raise
 
-    # Dispatch graph in background
-    asyncio.create_task(run_review_stream_task(event, review_id))
+    # Dispatch the review as an Arq job instead of an in-process
+    # asyncio.create_task — this is what lets it survive this FastAPI
+    # process restarting, and run on a worker process that isn't even this
+    # one. job_id is persisted on the review row (not just kept in Arq's
+    # own internal state) so a later restart-reconciliation pass can query
+    # "is this job actually still running" independently of Arq.
+    # correlation_id is passed as its own explicit job argument, not
+    # folded into the webhook payload dict where it'd be one more
+    # unlabeled key nobody reading run_review_job's signature would think
+    # to look for.
+    pool = await get_arq_pool()
+    job = await pool.enqueue_job("run_review_job", event.model_dump(mode="json"), review_id, correlation_id)
+    review_repo.update_review(review_id, {"job_id": job.job_id if job else None})
+    logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
 
     return {"reviewId": review_id, "status": "queued"}
 
 
 # --- REST API Router ---
-api_router = APIRouter(prefix="/api")
+# Every /api/* route requires a valid session (401 if missing/expired).
+# Repo-scoped routes layer an additional per-route ownership dependency
+# (require_repo_full_name_access / require_repo_id_access /
+# require_review_repo_access) that raises 403 if the signed-in user's
+# GitHub token can't see that specific repo. See app/auth.py.
+api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @api_router.get("/stats", response_model=DashboardStats)
@@ -550,37 +209,59 @@ async def get_repos():
 
 
 @api_router.get("/repos/{repo_id}/settings", response_model=RepositorySettings)
-async def get_repo_settings(repo_id: str):
+async def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_access)):
     return RepositorySettings(**repo_repo.get_or_create_settings(repo_id))
 
 
 @api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings)
-async def update_repo_settings(repo_id: str, settings_update: RepositorySettings):
+async def update_repo_settings(
+    repo_id: str, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
+):
     settings_dict = settings_update.model_dump()
     return RepositorySettings(**repo_repo.update_settings(repo_id, settings_dict))
 
 
-@api_router.get("/reviews", response_model=list[Review])
+@api_router.get("/reviews", response_model=Paginated[Review])
 async def get_reviews(
     repo: str | None = None,
     status: str | None = None,
     severity: str | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    user: AuthUser = Depends(get_current_user),
+    request: Request = None,
 ):
-    items, _ = review_repo.list_reviews(
-        repo_name=repo, status=status, severity=severity, page=1, page_size=1000
+    # `repo` is an optional query filter here (unlike the path-scoped routes
+    # below), so ownership is only checked when a specific repo is asked for.
+    # With no filter this returns the caller's own cross-repo review history
+    # from `list_reviews` — login is required, but it is not further scoped
+    # per-repo since there is no single repo to check against.
+    if repo:
+        await check_repo_access(request, repo)
+    # list_reviews already implemented real offset pagination (page/
+    # page_size -> Supabase .range()) — this route just never exposed it,
+    # hardcoding page=1/page_size=1000 and discarding the real `total`
+    # count it already returns.
+    items, total = review_repo.list_reviews(
+        repo_name=repo, status=status, severity=severity, page=page, page_size=page_size
     )
-    return [Review(**i) for i in items]
+    return Paginated(items=[Review(**i) for i in items], page=page, page_size=page_size, total=total)
 
 
-@api_router.get("/repos/{repo_full_name:path}/reviews", response_model=list[Review])
-async def get_repo_reviews(repo_full_name: str):
-    items, _ = review_repo.list_reviews(repo_name=repo_full_name, page=1, page_size=1000)
-    return [Review(**i) for i in items]
+@api_router.get("/repos/{repo_full_name:path}/reviews", response_model=Paginated[Review])
+async def get_repo_reviews(
+    repo_full_name: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
+    _: AuthUser = Depends(require_repo_full_name_access),
+):
+    items, total = review_repo.list_reviews(repo_name=repo_full_name, page=page, page_size=page_size)
+    return Paginated(items=[Review(**i) for i in items], page=page, page_size=page_size, total=total)
 
 
-@api_router.get("/reviews/{id}", response_model=ReviewDetail)
-async def get_review_detail(id: str):
-    review = review_repo.get_review(id)
+@api_router.get("/reviews/{review_id}", response_model=ReviewDetail)
+async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
+    review = review_repo.get_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
     return ReviewDetail(**review)
@@ -594,38 +275,77 @@ async def get_hitl_pending():
 
 
 @api_router.post("/hitl/{review_id}/approve", response_model=dict)
-async def approve_hitl(review_id: str):
+async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
+    # Resolve where the comment actually needs to go BEFORE mutating any
+    # state. repo_full_name must be the raw owner/name pair — the mapped
+    # `review` dict's "repo_name" field is deliberately just the short
+    # display name (see ReviewRepository._map_review_row), which is what
+    # caused this to post to the wrong place before. installation_id must
+    # be the one captured from the original webhook event at review-creation
+    # time (see github_webhook below), not a hardcoded fallback — a
+    # hardcoded id silently posts through whichever installation that id
+    # happens to belong to, which may not even have this repo installed.
+    gh_context = review_repo.get_review_github_context(review_id)
+    if not gh_context or not gh_context.get("repo_full_name") or not gh_context.get("installation_id"):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot resolve installation_id/repo_full_name for review {review_id} — "
+                "refusing to post an approval comment to an unverified destination."
+            ),
+        )
+
+    # This request has no X-GitHub-Delivery header of its own (it's a
+    # plain HTTP call from the dashboard, not a webhook) — resume logging
+    # under the SAME correlation ID the original webhook started, so this
+    # leg of the trace is discoverable from the same grep as the rest.
+    if gh_context.get("correlation_id"):
+        set_correlation_id(gh_context["correlation_id"])
+
     review_repo.update_review(review_id, {"status": "completed"})
 
-    # Post final comment to GitHub
-    try:
-        from app.services.github_client import GitHubClient
+    # Post final comment to GitHub. A failure here is surfaced to the
+    # caller (502), not swallowed — silently returning success while the
+    # comment never posted is exactly the failure mode this fix closes.
+    from app.services.github_client import GitHubClient
 
-        # Load installation_id from baseline or configuration
-        installation_id = 4226262  # Fallback standard
-        gh = GitHubClient(installation_id=installation_id)
-        gh.post_review_comment(
-            repo_full_name=review["repo_name"],  # wait, repo_full_name in review is reconstructed
-            pr_number=review["pull_request_number"],
-            markdown_body=review.get("final_comment_markdown") or "Approved by human.",
+    try:
+        logger.info("Posting HITL-approved comment to GitHub", extra={
+            "review_id": review_id, "repo_full_name": gh_context["repo_full_name"], "pr_number": gh_context["pr_number"],
+        })
+        gh = GitHubClient(installation_id=gh_context["installation_id"])
+        github_response = gh.post_review_comment(
+            repo_full_name=gh_context["repo_full_name"],
+            pr_number=gh_context["pr_number"],
+            markdown_body=gh_context.get("final_comment_markdown") or "Approved by human.",
         )
     except Exception as e:
         logger.exception("Failed to post human approval comment to GitHub: %s", e)
+        raise HTTPException(status_code=502, detail=f"Failed to post approval comment to GitHub: {e}")
+
+    logger.info("GitHub comment posted", extra={
+        "review_id": review_id, "github_comment_url": github_response.get("html_url"),
+    })
+    review_repo.update_review(review_id, {"github_comment_preview": github_response.get("html_url")})
 
     # Publish hitl.approved and completed events
     await stream_manager.publish(review_id, {"type": "hitl.approved", "reviewId": review_id})
     await stream_manager.publish(
         review_id, {"type": "review.completed", "reviewId": review_id, "status": "completed"}
     )
-    return {"success": True}
+    return {
+        "success": True,
+        "github_comment_url": github_response.get("html_url"),
+        "github_comment_id": github_response.get("id"),
+    }
 
 
 @api_router.post("/hitl/{review_id}/reject", response_model=dict)
-async def reject_hitl(review_id: str):
+async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -640,40 +360,50 @@ async def reject_hitl(review_id: str):
 
 
 @api_router.get("/ledger/{repo_full_name:path}/trend", response_model=list[LedgerTrend])
-async def get_ledger_trend(repo_full_name: str):
+async def get_ledger_trend(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return [LedgerTrend(**t) for t in review_repo.get_ledger_trend(repo_full_name)]
 
 
 @api_router.get("/ledger/{repo_full_name:path}", response_model=LedgerStats)
-async def get_ledger_stats(repo_full_name: str):
+async def get_ledger_stats(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return LedgerStats(**review_repo.get_ledger_stats(repo_full_name))
 
 
 @api_router.get("/reviews/{review_id}/stream")
-async def stream_review_events(review_id: str):
+async def stream_review_events(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     """
-    Subscribes to the event queue for the given review_id and yields
-    Server-Sent Events (SSE). Closes automatically once a terminal
-    state transition is reached.
+    Subscribes to this review's Redis pub/sub channel (app/services/
+    stream_manager.py) and forwards events as Server-Sent Events. Backed by
+    Redis rather than in-process memory, so this works correctly even when
+    the job that produces these events is running in a different process
+    (the Arq worker) or a client is connected to a different FastAPI
+    instance than whichever one originally received the webhook.
+
+    Emits a named `event: <type>` line, not just bare `data:` — the
+    frontend's EventSource consumer (hooks/use-review-stream.ts) listens
+    via addEventListener("review.started", ...) etc., which never fires on
+    an unnamed/default "message" event. The previous implementation only
+    ever sent bare `data:` frames, so none of those listeners were
+    actually firing before this fix — found while rewriting this endpoint
+    for Redis, not something this migration introduced.
     """
-    queue = stream_manager.register(review_id)
+    gh_context = review_repo.get_review_github_context(review_id)
+    if gh_context and gh_context.get("correlation_id"):
+        set_correlation_id(gh_context["correlation_id"])
 
     async def event_generator():
         try:
-            while True:
-                event = await queue.get()
+            async for event in stream_manager.stream(review_id):
                 payload = SseEventPayload(**event)
-                yield f"data: {payload.model_dump_json(by_alias=True)}\n\n"
+                event_type = event.get("type", "message")
+                yield f"event: {event_type}\ndata: {payload.model_dump_json(by_alias=True)}\n\n"
 
                 # Terminal event checks
-                event_type = event.get("type")
                 if event_type in ("review.completed", "review.failed", "waiting.hitl"):
                     logger.info("Closing stream for review %s on event %s", review_id, event_type)
                     break
         except asyncio.CancelledError:
             pass
-        finally:
-            stream_manager.disconnect(review_id, queue)
 
     return StreamingResponse(
         event_generator(),
@@ -685,23 +415,28 @@ async def stream_review_events(review_id: str):
     )
 
 
-# --- Root level stub routes (for exact apiGet layout.tsx compat) ---
-@app.get("/auth/me", response_model=User)
-@api_router.get("/auth/me", response_model=User)
-async def auth_me():
-    return User(id="user-1", name="Demo User")
-
-
-@app.post("/auth/logout")
-@api_router.post("/auth/logout")
-async def auth_logout():
-    return {"status": "ok"}
-
-
 @app.get("/healthz")
-async def healthz():
-    return {"status": "ok"}
+async def healthz(response: Response):
+    """
+    Real dependency reachability, not a static ping — see
+    app/services/health_checks.py. Intentionally NOT behind the Phase 1
+    auth dependency: infra tooling (load balancers, uptime monitors,
+    container orchestrators) needs to reach this without a session, which
+    is the standard shape for a health-check endpoint and matches this
+    route's existing placement (outside api_router already).
+    """
+    body, all_healthy = await run_health_checks()
+    if not all_healthy:
+        response.status_code = 503
+    return body
 
 
-# --- Mount API router ---
+# --- Mount routers ---
+# auth_router carries the real /auth/github/login, /auth/github/callback,
+# /auth/me, /auth/logout — replacing the hardcoded "Demo User" stubs that
+# used to live here. It is intentionally NOT behind api_router's
+# get_current_user dependency: login/callback must be reachable while
+# logged out, and /auth/me and /auth/logout enforce their own auth inline
+# (see app/auth.py) since they aren't under the /api prefix.
+app.include_router(auth_router)
 app.include_router(api_router)

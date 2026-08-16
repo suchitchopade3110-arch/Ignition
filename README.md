@@ -102,6 +102,13 @@ bun install
 
 You'll need your own GitHub App, a Supabase project, and an LLM API key to actually run this end-to-end. None of that is required just to read the code.
 
+`requirements.txt` is fully pinned with hashes, compiled from `requirements.in` (the loosely-versioned direct dependencies) — `pip install -r requirements.txt` reproduces the exact same dependency tree every time, not whatever happens to resolve on the day you install. To regenerate it after changing `requirements.in`:
+
+```bash
+pip install uv
+uv pip compile --generate-hashes --output-file=requirements.txt requirements.in
+```
+
 ```bash
 # Terminal 1 — the static analysis service
 cd ast-analyzer && bun run server.ts

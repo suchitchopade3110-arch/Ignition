@@ -5,6 +5,8 @@ Pure wiring only. Node logic lives in graph/nodes/, routing decisions live
 in graph/routing.py. If you're tempted to add an `if` here, it probably
 belongs in routing.py instead.
 """
+import logging
+
 from langgraph.graph import StateGraph, END
 
 from app.graph.state import ReviewState
@@ -15,6 +17,8 @@ from app.graph.nodes.agent_2b_chaos import agent_2b_chaos
 from app.graph.nodes.agent_2c_security import agent_2c_security
 from app.graph.nodes.agent_3_critic import agent_3_critic
 from app.graph.nodes.agent_4_autofix import agent_4_autofix
+
+logger = logging.getLogger(__name__)
 
 
 def direct_rejection(state: ReviewState) -> dict:
@@ -30,6 +34,9 @@ def pause_for_human_approval(state: ReviewState) -> dict:
 def finalize_and_post(state: ReviewState) -> dict:
     from app.services.github_client import GitHubClient
 
+    logger.info("Posting final review comment to GitHub", extra={
+        "repo_full_name": state.repo_full_name, "pr_number": state.pr_number,
+    })
     GitHubClient(installation_id=state.installation_id).post_review_comment(
         repo_full_name=state.repo_full_name,
         pr_number=state.pr_number,

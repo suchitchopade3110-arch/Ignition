@@ -1,7 +1,11 @@
 from datetime import datetime
 import json
+import logging
 import collections
+from postgrest.exceptions import APIError
 from app.database import get_supabase
+
+logger = logging.getLogger(__name__)
 
 class ReviewRepository:
     TABLE = "reviews"
@@ -9,7 +13,7 @@ class ReviewRepository:
     def __init__(self):
         self._db = get_supabase()
 
-    def create_review(self, review_id: str, repo_full_name: str, pr_number: int, title: str, author: str, branch: str, commit_sha: str) -> dict:
+    def create_review(self, review_id: str, repo_full_name: str, pr_number: int, title: str, author: str, branch: str, commit_sha: str, installation_id: int | None = None, correlation_id: str | None = None) -> dict:
         now = datetime.utcnow().isoformat() + "Z"
         row = {
             "id": review_id,
@@ -19,6 +23,8 @@ class ReviewRepository:
             "author": author,
             "branch": branch,
             "commit_sha": commit_sha,
+            "installation_id": installation_id,
+            "correlation_id": correlation_id,
             "status": "queued",
             "severity": "none",
             "findings_count": 0,
@@ -29,6 +35,37 @@ class ReviewRepository:
         }
         res = self._db.table(self.TABLE).insert(row).execute()
         return res.data[0] if res.data else row
+
+    def get_review_by_repo_pr_sha(self, repo_full_name: str, pr_number: int, commit_sha: str) -> dict | None:
+        """Used by the webhook idempotency check (app/main.py::github_webhook)
+        to report which existing review a duplicate delivery matched."""
+        res = (
+            self._db.table(self.TABLE)
+            .select("id, correlation_id")
+            .eq("repo_full_name", repo_full_name)
+            .eq("pr_number", pr_number)
+            .eq("commit_sha", commit_sha)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+
+    def get_review_github_context(self, review_id: str) -> dict | None:
+        """
+        The pieces approve_hitl needs to post a comment to the right place:
+        repo_full_name (must be owner/name, not the short display name) and
+        installation_id (captured from the webhook payload at review-creation
+        time — see app/main.py::github_webhook — since by the time a human
+        approves in a separate later request, there's no webhook event left
+        to read it from).
+        """
+        res = (
+            self._db.table(self.TABLE)
+            .select("repo_full_name, installation_id, pr_number, final_comment_markdown, correlation_id")
+            .eq("id", review_id)
+            .execute()
+        )
+        return res.data[0] if res.data else None
 
     def update_review(self, review_id: str, updates: dict) -> dict:
         # If status changes to completed/failed, set completed_at
@@ -224,24 +261,49 @@ class RepoRepository:
         self._db = get_supabase()
 
     def get_or_create_repo(self, repo_full_name: str) -> dict:
+        """
+        Atomic upsert, not check-then-insert: two concurrent webhooks for a
+        brand-new repo racing this function previously could both pass the
+        "doesn't exist yet" SELECT and both attempt an insert. `id` is
+        already a primary key (repositories_pkey, confirmed live), so the
+        loser's plain INSERT would raise a duplicate-key error — which the
+        old `except Exception: pass` silently swallowed, returning a
+        locally-constructed dict that was never actually verified against
+        what got persisted.
+
+        DO NOTHING (not DO UPDATE) is correct here: every field in `row` is
+        deterministically derived from repo_full_name, so there's nothing
+        meaningful to update on conflict — the first writer's row is fine,
+        we just need everyone else to no-op instead of erroring.
+        """
         repo_id = repo_full_name.replace("/", "_")
-        res = self._db.table(self.TABLE).select("*").eq("id", repo_id).execute()
-        if res.data:
-            return res.data[0]
-            
         owner, name = repo_full_name.split("/", 1)
         row = {
             "id": repo_id,
             "name": name,
             "owner": owner,
-            "language": "TypeScript"
+            "language": "TypeScript",
         }
         try:
-            self._db.table(self.TABLE).insert(row).execute()
-            self.get_or_create_settings(repo_id, repo_full_name)
-        except Exception:
-            pass
-        return row
+            self._db.table(self.TABLE).upsert(row, on_conflict="id", ignore_duplicates=True).execute()
+        except APIError as e:
+            # ON CONFLICT DO NOTHING never raises for the race case itself —
+            # if something still lands here, it's a genuine, unexpected
+            # failure (bad connection, schema mismatch, etc.), not the race
+            # this fix targets. Log it instead of swallowing it.
+            logger.exception("Unexpected error upserting repo %s: %s", repo_full_name, e)
+            raise
+
+        # Upsert with ignore_duplicates returns nothing for a row that lost
+        # the race (it wasn't touched), so re-read is the only way to get
+        # back the actually-persisted row regardless of who won.
+        res = self._db.table(self.TABLE).select("*").eq("id", repo_id).execute()
+        if not res.data:
+            raise RuntimeError(f"Repo {repo_full_name} not found immediately after upsert")
+        persisted = res.data[0]
+
+        self.get_or_create_settings(repo_id, repo_full_name)
+        return persisted
 
     def list_repos(self) -> list[dict]:
         repos_res = self._db.table(self.TABLE).select("*").execute()
@@ -318,3 +380,14 @@ class RepoRepository:
         filtered = {k: v for k, v in updates.items() if k in allowed}
         res = self._db.table(self.SETTINGS_TABLE).update(filtered).eq("repo_id", repo_id).execute()
         return res.data[0] if res.data else self.get_or_create_settings(repo_id)
+
+    def update_repo_stats(self, repo_full_name: str, acs_score: float | None, last_review_at: str) -> None:
+        """Called from the review pipeline's finalize_and_post step. Note
+        list_repos() above computes acsScore/lastReviewDate dynamically from
+        the reviews table and does not read these columns back — this is a
+        write-only cache, kept for whatever later consumer wants a fast
+        lookup without joining reviews."""
+        repo_id = repo_full_name.replace("/", "_")
+        self._db.table(self.TABLE).update(
+            {"acs_score": acs_score, "last_review_at": last_review_at}
+        ).eq("id", repo_id).execute()

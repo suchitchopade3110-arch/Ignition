@@ -1,0 +1,52 @@
+name: CI
+
+# Runs the full tests/ suite on every PR and push to main, and fails the
+# build on any test failure — including tests/test_agent_1_gate.py
+# (Hard-Rule gate), tests/test_routing.py (agent routing/forking), and
+# tests/test_scoring.py (severity/ACS scoring), which are unconditionally
+# collected as part of `pytest tests/` below, not opted into separately.
+#
+# No repo secrets are configured or required. Every external dependency
+# the test suite would otherwise hit for real (GitHub, Groq, Supabase, the
+# Bun AST analyzer, the embedding model) is mocked — see
+# tests/conftest.py and tests/test_integration_webhook_review_comment.py's
+# module docstring for the mocking approach and why. The dummy env values
+# below exist only so app/config.py's Settings can construct without
+# raising at import time; nothing in the suite performs a real network
+# call using them.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_APP_ID: "12345"
+      GITHUB_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nDUMMY\n-----END RSA PRIVATE KEY-----"
+      GITHUB_WEBHOOK_SECRET: "test-webhook-secret"
+      GITHUB_CLIENT_ID: "dummy-client-id"
+      GITHUB_CLIENT_SECRET: "dummy-client-secret"
+      LLM_PROVIDER: "groq"
+      LLM_API_KEY: "dummy-llm-key"
+      LLM_MODEL_NAME: "dummy-model"
+      SUPABASE_URL: "https://dummy-project.supabase.co"
+      SUPABASE_SERVICE_KEY: "dummy-service-key"
+      AST_SERVICE_URL: "http://localhost:4000"
+      REDIS_URL: "redis://localhost:6379/0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Installs from the fully pinned, hashed requirements.txt (not
+      # requirements.in) — reproducible dependency tree, same one a fresh
+      # `pip install -r requirements.txt` produces locally.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v
