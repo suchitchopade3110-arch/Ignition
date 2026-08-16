@@ -6,9 +6,7 @@ def test_acs_perfect_score():
 
 
 def test_acs_with_violations():
-    # DELIBERATE BREAK for Phase 4 Prompt 4 CI verification — revert this
-    # line after confirming the CI run fails on it.
-    assert compute_acs(total_dependencies=10, total_violations=2) == 999.0
+    assert compute_acs(total_dependencies=10, total_violations=2) == 80.0
 
 
 def test_acs_zero_dependencies_does_not_divide_by_zero():
