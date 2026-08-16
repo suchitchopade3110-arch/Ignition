@@ -24,7 +24,7 @@ export function HeroSection() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1 }}
-              className="text-4xl sm:text-6xl lg:text-6xl xl:text-7xl font-extrabold tracking-tight text-surface-dark-fg leading-[0.98] uppercase font-sans select-none"
+              className="text-display tracking-tight text-surface-dark-fg uppercase font-sans select-none"
             >
               YOUR CODEBASE <br />
               IS ALREADY <br />

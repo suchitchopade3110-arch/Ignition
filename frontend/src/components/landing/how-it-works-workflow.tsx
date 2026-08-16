@@ -37,7 +37,7 @@ export function HowItWorksWorkflow() {
         {/* Section heading. Carries the section semantically so the step cards
             below can sit at h3 without skipping a level. */}
         <div className="mb-16 md:mb-20">
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-surface-dark-fg uppercase leading-[1.05] font-sans max-w-3xl">
+          <h2 className="text-h2 tracking-tight text-surface-dark-fg uppercase font-sans max-w-3xl">
             How Ignition works
           </h2>
         </div>
@@ -73,7 +73,7 @@ export function HowItWorksWorkflow() {
                 {/* Content */}
                 <div className="flex flex-col gap-2 pt-2">
                   <span className="font-mono text-xs font-bold text-primary">{step.number}</span>
-                  <h3 className="text-lg font-bold text-surface-dark-fg uppercase font-sans tracking-wide">
+                  <h3 className="text-h3 text-surface-dark-fg uppercase font-sans tracking-wide">
                     {step.phase}
                   </h3>
                   <p className="text-xs sm:text-sm text-surface-dark-muted leading-relaxed">

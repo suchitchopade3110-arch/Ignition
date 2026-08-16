@@ -15,7 +15,7 @@ export function EngineeringImpactStrip() {
     <section className="py-24 md:py-28 relative bg-surface-light text-surface-light-fg">
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         <div className="mb-14">
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-surface-light-fg uppercase leading-[1.05] font-sans max-w-3xl">
+          <h2 className="text-h2 tracking-tight text-surface-light-fg uppercase font-sans max-w-3xl">
             Engineering impact
           </h2>
         </div>

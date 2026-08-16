@@ -47,7 +47,7 @@ export function CoreCapabilitiesGrid() {
     >
       <div className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12">
         <div className="mb-16 md:mb-20">
-          <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-surface-dark-fg uppercase leading-[1.05] font-sans max-w-3xl">
+          <h2 className="text-h2 tracking-tight text-surface-dark-fg uppercase font-sans max-w-3xl">
             Core capabilities
           </h2>
         </div>
@@ -69,7 +69,7 @@ export function CoreCapabilitiesGrid() {
                   <Icon className="h-7 w-7 stroke-[1.5]" />
                 </div>
 
-                <h3 className="text-base font-bold text-surface-dark-fg uppercase font-sans tracking-wide leading-snug">
+                <h3 className="text-h3 text-surface-dark-fg uppercase font-sans tracking-wide">
                   {cap.title}
                 </h3>
 

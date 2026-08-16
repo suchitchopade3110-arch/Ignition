@@ -18,7 +18,7 @@ export function EditorialBelief() {
             transition={{ duration: 0.5 }}
             className="lg:col-span-6"
           >
-            <h2 className="text-3xl sm:text-4xl lg:text-5xl font-black tracking-tight text-surface-light-fg uppercase leading-[1.05] font-sans">
+            <h2 className="text-h2 tracking-tight text-surface-light-fg uppercase font-sans">
               CODE REVIEW IS NOT <br />
               A CHECKBOX. <br />
               IT IS A CONTINUOUS <br />

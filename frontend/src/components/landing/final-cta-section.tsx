@@ -18,7 +18,7 @@ export function FinalCtaSection() {
               viewport={{ once: true }}
               transition={{ duration: 0.5 }}
             >
-              <h2 className="text-4xl sm:text-5xl xl:text-6xl font-black text-surface-dark-fg uppercase leading-[1.0] tracking-tight font-sans">
+              <h2 className="text-h2 text-surface-dark-fg uppercase tracking-tight font-sans">
                 READY TO REVIEW <br />
                 DIFFERENTLY?
               </h2>

@@ -203,12 +203,21 @@ Done:
 - Capabilities section rebuilt on an asymmetric 7/5 grid.
 - Dashboard loading, error and empty states scoped per panel.
 - Fabricated trend percentages removed from the dashboard.
+- Shared heading scale (`text-display` / `text-h1` / `text-h2` / `text-h3`) implemented as
+  Tailwind v4 theme tokens. Landing sizes are fluid via `clamp()`, replacing what used to be
+  three stacked breakpoint variants per heading. Applied to every h1/h2/h3 on the landing page
+  and to `PageHeader`'s app-shell h1. This also unified the two h3 sizes that previously
+  disagreed (`text-base` vs `text-lg`) and the outlier final-CTA h2 that was larger than the
+  other four section headers for no stated reason.
 
 Outstanding:
 
 1. Resolve the glass open decision at the top of this document.
-2. Shared type scale. Display sizes are still set ad hoc per component; `text-display` /
-   `text-h1` / `text-h2` / `text-body` / `text-caption` are specified above but not implemented.
+2. Caption-scale consolidation. Three arbitrary micro sizes (`text-[9px]` / `text-[10px]` /
+   `text-[11px]`) are still spread across 14 files for badges, timestamps and metadata. Left
+   alone deliberately: several sit inside tightly-padded pills where a size change risks text
+   overflow, and there is no visual-diff tooling in place to verify 14 files' worth of badges
+   without a manual pass. Worth a dedicated pass with screenshots per surface, not a blind sweep.
 3. Footer placeholder links. Pricing, Privacy, Terms, Security, Changelog and Status all point at
    `/login` or `/dashboard` because the destination pages do not exist.
 4. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
