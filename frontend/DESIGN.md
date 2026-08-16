@@ -209,18 +209,25 @@ Done:
   allowed it: the top nav, the sidebar, the mobile drawer overlay, the settings dialog, the user
   menu dropdown, and the single login card.
 
+- Glass CSS consolidated: `.glass-header`, `.glass-sidebar`, `.glass-panel-elevated` now applied
+  at the four sites that were hand-rolling the identical value inline (app-shell header and
+  sidebar wrapper, the settings dialog, the user menu dropdown). Found and fixed a real bug along
+  the way — the desktop sidebar was compositing two stacked blur layers for one visible edge.
+  Added `.glass-scrim` for the modal/drawer dimming backdrop, previously duplicated verbatim in
+  two places.
+- Footer no longer links Terms/Privacy/Security/Pricing/Changelog/Status to the wrong destination.
+  They render as inert "Soon" text instead of live navigation to `/login` or `/dashboard`.
+- SSE-driven agent status changes and finding arrivals now animate (crossfade / opacity+y entrance)
+  instead of popping in instantly, riding the existing `MotionConfig reducedMotion="user"` provider.
+
 Outstanding:
 
 1. Caption-scale consolidation. Three arbitrary micro sizes (`text-[9px]` / `text-[10px]` /
    `text-[11px]`) are still spread across 14 files for badges, timestamps and metadata. Left
    alone deliberately: several sit inside tightly-padded pills where a size change risks text
-   overflow, and there is no visual-diff tooling in place to verify 14 files' worth of badges
-   without a manual pass. Worth a dedicated pass with screenshots per surface, not a blind sweep.
-2. Footer placeholder links. Pricing, Privacy, Terms, Security, Changelog and Status all point at
-   `/login` or `/dashboard` because the destination pages do not exist.
+   overflow, and this session's screenshot compositing was intermittently unavailable, which is
+   exactly the eyes-on per-surface verification this item needs before touching 14 files of tight
+   badges. Worth a dedicated pass with reliable screenshots, not a blind sweep or a DOM-only check.
+2. Real footer destinations. The six items above need actual pages once they exist, or the "Soon"
+   treatment can stay indefinitely if that's the intended posture.
 3. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
-4. Extend spring easing from the hero into dashboard state transitions.
-5. Delete the now-unused `.glass-panel` / `.glass-panel-subtle` / `.glass-panel-elevated`
-   utilities from `globals.css` if nothing ends up using them, or apply them to the surfaces
-   that are still legitimately glass (nav, sidebar, dialog, dropdown) instead of the ad hoc
-   inline classes those currently carry.
