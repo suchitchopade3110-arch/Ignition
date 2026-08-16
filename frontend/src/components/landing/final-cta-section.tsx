@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { motion } from "framer-motion"
 import { ArrowRight } from "lucide-react"
-import { NetworkGlobe } from "./network-globe"
+import RotatingEarth from "@/components/ui/wireframe-dotted-globe"
 
 export function FinalCtaSection() {
   return (
@@ -62,7 +62,7 @@ export function FinalCtaSection() {
             transition={{ duration: 0.7, delay: 0.2 }}
             className="lg:col-span-6 flex items-center justify-center w-full h-[260px] sm:h-[360px] lg:h-[500px] xl:h-[540px] max-w-[280px] sm:max-w-[380px] lg:max-w-none mx-auto lg:mx-0 relative overflow-visible"
           >
-            <NetworkGlobe className="w-full h-full" />
+            <RotatingEarth className="w-full h-full" />
           </motion.div>
         </div>
       </div>
