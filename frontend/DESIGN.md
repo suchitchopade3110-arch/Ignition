@@ -227,10 +227,13 @@ Done:
   375px on every site, including the diff-viewer's fixed 40px gutter — the highest-risk one.
   Deliberately excluded: `hero-product-console.tsx` (a self-contained decorative landing mockup
   with its own intentional 9/10/11px density hierarchy) and the footer's one-off "Soon" badge.
+- Footer's six placeholder links now go to real pages (`/pricing`, `/changelog`, `/security`,
+  `/privacy`, `/terms`, `/status`), replacing the inert "Soon" text. Pages are an honest "not live
+  yet" shell (`ComingSoonPage`), not fabricated legal/policy content — inventing real-looking Terms
+  of Service or Privacy Policy text would be actively misleading, not just incomplete.
+- Dashboard trend indicator restored with real data. `ReviewRepository._issues_found_trend()`
+  compares this week's vs last week's `sum(findings_count)`; returns `None` (not a fabricated 0%)
+  when there's no prior-week baseline. Deliberately not added to `active_reviews`, since that's an
+  instantaneous snapshot, not a metric a week-over-week percentage would honestly describe.
 
-Outstanding:
-
-1. Real footer destinations. Terms/Privacy/Security/Pricing/Changelog/Status render as inert "Soon"
-   text now instead of linking to the wrong page. They need actual pages once they exist, or the
-   "Soon" treatment can stay indefinitely if that's the intended posture.
-2. Real trend data. Restore the trend indicators once the API exposes a period-over-period field.
+Outstanding: none currently tracked.
