@@ -29,8 +29,9 @@ MOCKING APPROACH (read this before assuming a pattern/library):
     the real webhook handler, real signature verification, real graph
     traversal/routing, real GitHub-post orchestration — only the actual
     database round-trip is faked.
-  - Redis/Arq: also mocked (get_arq_pool), not run against a real Redis
-    instance. This keeps the whole suite runnable with zero external
+  - Redis/Arq: also mocked (get_arq_pool AND stream_manager.publish — both
+    Redis touchpoints, not just the job queue one), not run against a real
+    Redis instance. This keeps the whole suite runnable with zero external
     services (no service container needed in CI), at the cost of not
     testing Arq's own enqueue/dequeue mechanics — those are Arq's
     responsibility to have already tested, not this project's job function
@@ -38,6 +39,11 @@ MOCKING APPROACH (read this before assuming a pattern/library):
     directly awaits run_review_job() to simulate what the real worker
     would execute — genuinely running the real graph, real routing, real
     GitHub-post call, not a stand-in for any of that.
+    (First draft of this test only mocked get_arq_pool and missed
+    stream_manager.publish's own separate Redis client — passed locally
+    only because a real Redis happened to be running on this dev machine,
+    which meant the suite wasn't actually hermetic. CI, correctly having
+    no Redis at all, caught this immediately.)
   - Patches target the CLASS/METHOD (e.g. `LLMClient.complete`,
     `GitHubClient` itself, `VectorStore.similar_incidents`) rather than
     per-module import bindings, specifically because several call sites
@@ -59,6 +65,7 @@ from app.services.review_pipeline import review_repo, repo_repo, run_review_job
 from app.services.ast_client import ASTClient
 from app.services.llm_client import LLMClient
 from app.services.github_client import GitHubClient
+from app.services.stream_manager import stream_manager
 from app.rag.vector_store import VectorStore
 from app.repositories.ledger import LedgerRepository
 from app.schemas.ast_payload import ASTAnalyzerPayload
@@ -242,6 +249,11 @@ def mock_arq(monkeypatch):
         return fake_pool
 
     monkeypatch.setattr(main_module, "get_arq_pool", fake_get_arq_pool)
+    # stream_manager.publish is the OTHER real-Redis touchpoint (SSE
+    # pub/sub) that run_review_job hits repeatedly — separate from the
+    # job-queue Redis client above, and easy to miss for exactly that
+    # reason (see the module docstring's note on this).
+    monkeypatch.setattr(stream_manager, "publish", AsyncMock(return_value=None))
     return fake_pool
 
 
