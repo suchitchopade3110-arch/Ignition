@@ -106,6 +106,21 @@ function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[nu
   return violations;
 }
 
+// Unbounded before this — projectCache (a Map, module-level in server.ts,
+// living for the process's whole lifetime) grew by one warm ts-morph
+// Project per distinct repo ever analyzed, with no eviction. A long-running
+// deployment touching many repos over time would keep every one of them
+// resident in memory forever. Bounded LRU eviction below caps that: once
+// more than AST_CACHE_MAX_PROJECTS distinct repos are cached, the least
+// recently used one is dropped to make room for the next.
+const DEFAULT_MAX_CACHED_PROJECTS = 25;
+
+function maxCachedProjects(): number {
+  const raw = process.env.AST_CACHE_MAX_PROJECTS;
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CACHED_PROJECTS;
+}
+
 function getOrCreateProject(
   repoKey: string,
   sourceDir: string,
@@ -114,6 +129,12 @@ function getOrCreateProject(
   const cached = cache.get(repoKey);
   if (cached) {
     cached.addSourceFilesAtPaths(globsFor(sourceDir));
+    // Map preserves insertion order, not access order — re-inserting the
+    // same key moves it to the end, which is what makes "the first key in
+    // the Map" a valid least-recently-USED (not just least-recently-
+    // inserted) victim for eviction below.
+    cache.delete(repoKey);
+    cache.set(repoKey, cached);
     return cached;
   }
 
@@ -130,7 +151,18 @@ function getOrCreateProject(
   }
 
   cache.set(repoKey, project);
+  evictLeastRecentlyUsed(cache);
   return project;
+}
+
+function evictLeastRecentlyUsed(cache: Map<string, Project>): void {
+  const limit = maxCachedProjects();
+  while (cache.size > limit) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+    console.log(`AST project cache evicted (over ${limit}-entry limit): ${oldestKey}`);
+  }
 }
 
 export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzerPayload> {

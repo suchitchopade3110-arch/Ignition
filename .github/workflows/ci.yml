@@ -14,6 +14,11 @@ name: CI
 # below exist only so app/config.py's Settings can construct without
 # raising at import time; nothing in the suite performs a real network
 # call using them.
+#
+# The `frontend` job runs the Next.js dashboard's own lint (eslint),
+# typecheck (tsc --noEmit), and unit tests (vitest, frontend/tests/*) —
+# previously not wired into CI at all despite existing in the repo, so a
+# broken build/type error/failing test there was invisible until deploy.
 on:
   pull_request:
   push:
@@ -50,3 +55,29 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test

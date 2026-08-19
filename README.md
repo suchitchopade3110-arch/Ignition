@@ -73,7 +73,24 @@ No finding reaches you unverified. No decision to escalate is a guess. And if so
 | Static analysis engine | Bun + [ts-morph](https://github.com/dsherret/ts-morph), running as a persistent service |
 | Data & vector storage | Supabase (Postgres) + pgvector |
 | GitHub integration | PyGithub |
+| Rate limiting | [slowapi](https://github.com/laurentS/slowapi) on the webhook, OAuth login, and every `/api/*` route |
 | Frontend / dashboard | Next.js, Tailwind, shadcn/ui |
+
+## Deploying to production
+
+Set `APP_ENV=production` — at startup this auto-corrects/flags a few
+defaults that are safe for local dev but not for a real deployment
+(forces `SESSION_COOKIE_SECURE=true`, warns if `ALLOWED_ORIGINS` is still
+the localhost default or `GITHUB_WEBHOOK_SECRET` is unset). See
+`Settings.validate_production_safety` in `app/config.py` and the comments
+in `.env.example` for the full list of what's checked and the new
+rate-limit / cache-size knobs (`RATE_LIMIT_STORAGE_URI`,
+`WEBHOOK_RATE_LIMIT`, `AUTH_RATE_LIMIT`, `AST_CACHE_MAX_PROJECTS`).
+
+`GET /healthz` checks real reachability of every dependency the app
+actually needs to function — Supabase, the AST analyzer, the LLM
+provider, and Redis (the Arq queue + SSE backbone) — not just "is the
+process up."
 
 ## What v1 deliberately doesn't do
 

@@ -28,6 +28,10 @@ services:
       # network below, which has no published host port for this service
       # — nothing outside the compose stack can reach it either way.
       AST_ANALYZER_HOST: "0.0.0.0"
+      # Bounded warm-Project cache (see analyzer.ts::evictLeastRecentlyUsed)
+      # — unset falls back to the same DEFAULT_MAX_CACHED_PROJECTS the
+      # single-container entrypoint uses.
+      AST_CACHE_MAX_PROJECTS: "25"
     networks: [ignition]
     # Deliberately no `ports:` — internal to the compose network only.
 
