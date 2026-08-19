@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import collections
@@ -180,8 +180,48 @@ class ReviewRepository:
             "activeReviews": active_reviews,
             "hitlPending": hitl_pending,
             "avgAcsScore": round(avg_acs_score, 1),
-            "issuesFound": issues_found
+            "issuesFound": issues_found,
+            "issuesFoundTrend": self._issues_found_trend(),
         }
+
+    def _issues_found_trend(self) -> dict | None:
+        """
+        Week-over-week change in issues found: sum(findings_count) for
+        reviews created in the last 7 days vs the 7 days before that.
+        Returns None rather than a 0%/100% placeholder when there's no
+        prior-week baseline to compare against (e.g. a fresh deployment, or
+        a repo that just started using Ignition) — a fabricated number here
+        is exactly the thing this field was added to stop doing.
+        """
+        now = datetime.utcnow()
+        week_ago = (now - timedelta(days=7)).isoformat() + "Z"
+        two_weeks_ago = (now - timedelta(days=14)).isoformat() + "Z"
+
+        recent_res = (
+            self._db.table(self.TABLE)
+            .select("findings_count")
+            .gte("created_at", week_ago)
+            .execute()
+        )
+        prior_res = (
+            self._db.table(self.TABLE)
+            .select("findings_count")
+            .gte("created_at", two_weeks_ago)
+            .lt("created_at", week_ago)
+            .execute()
+        )
+
+        def _sum(rows: list[dict]) -> int:
+            return sum(int(r["findings_count"]) for r in rows if r.get("findings_count") is not None)
+
+        recent_total = _sum(recent_res.data or [])
+        prior_total = _sum(prior_res.data or [])
+
+        if prior_total <= 0:
+            return None
+
+        pct_change = ((recent_total - prior_total) / prior_total) * 100
+        return {"value": round(abs(pct_change), 1), "isPositive": pct_change >= 0}
 
     def get_ledger_stats(self, repo_full_name: str) -> dict:
         # Fetch reviews for repo

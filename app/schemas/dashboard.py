@@ -41,11 +41,22 @@ class Review(CamelModel):
     duration: str | None = None
     acs_score: float | None = None
 
+class TrendInfo(CamelModel):
+    value: float  # absolute percentage change, always non-negative
+    is_positive: bool  # whether the change is an increase
+
 class DashboardStats(CamelModel):
     active_reviews: int
     hitl_pending: int
     avg_acs_score: float
     issues_found: int
+    # Week-over-week change in issues found. Omitted (not zero) when there's
+    # no prior-week data to compare against — a fresh deployment shouldn't
+    # show a fabricated "+0%" or "+100%". No trend is attached to
+    # active_reviews: that field is an instantaneous snapshot count, not a
+    # cumulative metric, so a week-over-week percentage of it wouldn't
+    # describe the number the card actually shows.
+    issues_found_trend: TrendInfo | None = None
 
 class ReviewDiff(CamelModel):
     file: str

@@ -61,7 +61,7 @@ function AgentNode({ agent, isParallel = false }: { agent: AgentProgress; isPara
           {agent.findingCount > 0 && (
             <>
               <span className="text-border text-xs">•</span>
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold font-mono bg-warning/15 text-warning border border-warning/20">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-caption font-bold font-mono bg-warning/15 text-warning border border-warning/20">
                 {agent.findingCount} FINDING{agent.findingCount !== 1 ? "s" : ""}
               </span>
             </>

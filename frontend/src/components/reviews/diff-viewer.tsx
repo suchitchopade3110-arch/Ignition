@@ -73,10 +73,10 @@ export function DiffViewer({
 
                 return (
                   <tr key={idx} className={cn("group hover:bg-secondary/20", bgColor)}>
-                    <td className="w-10 px-2 py-0.5 text-right text-[11px] text-muted-foreground/50 select-none border-r border-border bg-card shrink-0">
+                    <td className="w-10 px-2 py-0.5 text-right text-caption text-muted-foreground/50 select-none border-r border-border bg-card shrink-0">
                       {isContext || isRemoved ? idx + 1 : ""}
                     </td>
-                    <td className="w-10 px-2 py-0.5 text-right text-[11px] text-muted-foreground/50 select-none border-r border-border bg-card shrink-0">
+                    <td className="w-10 px-2 py-0.5 text-right text-caption text-muted-foreground/50 select-none border-r border-border bg-card shrink-0">
                       {isContext || isAdded ? idx + 1 : ""}
                     </td>
                     <td className={cn("px-4 py-0.5 whitespace-pre select-text min-w-0", textColor)}>

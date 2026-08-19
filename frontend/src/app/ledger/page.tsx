@@ -286,7 +286,7 @@ export default function LedgerPage() {
                         <td className="py-3.5 pr-4">
                           <div className="flex flex-col gap-1">
                             <span className="font-semibold text-foreground hover:text-primary transition-colors text-sm">{rev.title}</span>
-                            <div className="flex items-center gap-2 text-muted-foreground font-mono tabular-nums text-[10px]">
+                            <div className="flex items-center gap-2 text-muted-foreground font-mono tabular-nums text-caption">
                               <span>#{rev.pullRequestNumber}</span>
                               <span>•</span>
                               <span className="flex items-center gap-1">
@@ -336,7 +336,7 @@ export default function LedgerPage() {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1 min-w-0 flex-1">
-                        <span className="text-[10px] font-mono tabular-nums text-muted-foreground block">
+                        <span className="text-caption font-mono tabular-nums text-muted-foreground block">
                           #{rev.pullRequestNumber}
                         </span>
                         <h4 className="font-semibold text-foreground text-sm line-clamp-2">
@@ -355,7 +355,7 @@ export default function LedgerPage() {
 
                     <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/[0.04] text-xs">
                       <StatusBadge status={rev.status} />
-                      <div className="flex items-center gap-3 text-muted-foreground font-mono tabular-nums text-[11px]">
+                      <div className="flex items-center gap-3 text-muted-foreground font-mono tabular-nums text-caption">
                         <span>{rev.duration || "N/A"}</span>
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />

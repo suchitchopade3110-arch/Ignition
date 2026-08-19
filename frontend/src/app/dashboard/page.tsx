@@ -148,6 +148,11 @@ export default function DashboardPage() {
               title="Issues Prevented"
               value={stats.issuesFound}
               icon={Code2}
+              trend={
+                stats.issuesFoundTrend
+                  ? { value: stats.issuesFoundTrend.value, label: "vs last week", isPositive: stats.issuesFoundTrend.isPositive }
+                  : undefined
+              }
               description="Across all repositories"
             />
           </div>
@@ -181,7 +186,7 @@ export default function DashboardPage() {
                           <span className="text-sm font-medium text-foreground truncate">
                             {review.repoName}
                           </span>
-                          <span className="text-[10px] font-mono text-muted-foreground">
+                          <span className="text-caption font-mono text-muted-foreground">
                             #{review.pullRequestNumber}
                           </span>
                         </div>
