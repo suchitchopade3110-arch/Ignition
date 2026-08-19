@@ -29,6 +29,7 @@ from pydantic import BaseModel
 from app.config import get_settings
 from app.repositories.auth import AuthRepository
 from app.repositories.dashboard import RepoRepository, ReviewRepository
+from app.services.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,8 @@ async def require_review_repo_access(
 # --- OAuth login flow --------------------------------------------------
 
 @router.get("/auth/github/login")
-async def github_login():
+@limiter.limit(get_settings().auth_rate_limit)
+async def github_login(request: Request):
     settings = get_settings()
     if not settings.github_client_id:
         raise HTTPException(status_code=500, detail="GITHUB_CLIENT_ID is not configured")
@@ -199,7 +201,9 @@ async def github_login():
 
 
 @router.get("/auth/github/callback")
+@limiter.limit(get_settings().auth_rate_limit)
 async def github_callback(
+    request: Request,
     code: str | None = None,
     state: str | None = None,
     ignition_oauth_state: str | None = Cookie(default=None),

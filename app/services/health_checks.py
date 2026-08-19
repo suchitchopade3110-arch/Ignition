@@ -11,6 +11,7 @@ import httpx
 from app.config import get_settings
 from app.database import get_supabase
 from app.services.llm_client import get_llm_client
+from app.services.redis_client import get_pubsub_redis
 
 _CHECK_TIMEOUT_SECONDS = 3.0
 
@@ -76,11 +77,35 @@ async def check_llm_provider() -> dict:
         return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
 
 
+async def check_redis() -> dict:
+    """Was missing entirely — the app is fully dependent on Redis (the Arq
+    job queue AND the SSE pub/sub backbone in stream_manager.py), so a
+    "healthy" /healthz that never actually checked it could report green
+    while every webhook enqueue and every live SSE stream was silently
+    broken. Uses the same shared pub/sub client the rest of the app uses
+    (app/services/redis_client.py::get_pubsub_redis) rather than opening a
+    dedicated connection just for this check."""
+    start = time.monotonic()
+    try:
+        client = get_pubsub_redis()
+        await asyncio.wait_for(client.ping(), timeout=_CHECK_TIMEOUT_SECONDS)
+        return _result("healthy", int((time.monotonic() - start) * 1000))
+    except asyncio.TimeoutError:
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), "timed out")
+    except Exception as e:
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
+
+
 async def run_health_checks() -> tuple[dict, bool]:
     """Returns (response_body, all_healthy)."""
-    supabase, ast_analyzer, llm_provider = await asyncio.gather(
-        check_supabase(), check_ast_analyzer(), check_llm_provider()
+    supabase, ast_analyzer, llm_provider, redis = await asyncio.gather(
+        check_supabase(), check_ast_analyzer(), check_llm_provider(), check_redis()
     )
-    checks = {"supabase": supabase, "ast_analyzer": ast_analyzer, "llm_provider": llm_provider}
+    checks = {
+        "supabase": supabase,
+        "ast_analyzer": ast_analyzer,
+        "llm_provider": llm_provider,
+        "redis": redis,
+    }
     all_healthy = all(c["status"] == "healthy" for c in checks.values())
     return {"status": "healthy" if all_healthy else "unhealthy", "checks": checks}, all_healthy

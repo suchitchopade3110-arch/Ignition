@@ -34,6 +34,7 @@ import logging
 from arq.connections import RedisSettings
 from arq.worker import func
 
+from app.config import get_settings
 from app.services.redis_client import get_redis_settings
 from app.services.review_pipeline import run_review_job
 from app.services.reconciliation import reconcile_orphaned_reviews
@@ -47,6 +48,10 @@ from app.services.llm_client import get_llm_client
 # structured JSON with the correlation ID, same as the FastAPI process.
 configure_logging()
 logger = logging.getLogger(__name__)
+# Same production-safety check app/main.py runs — the worker is an
+# independent entrypoint (`arq app.worker.WorkerSettings`) that never goes
+# through app/main.py's module body, so it needs its own call site.
+get_settings().validate_production_safety(logger)
 
 
 async def on_startup(ctx: dict) -> None:

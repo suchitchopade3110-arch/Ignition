@@ -19,6 +19,11 @@ from fastapi import FastAPI, Request, Response, Depends, HTTPException, APIRoute
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from postgrest.exceptions import APIError
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+from app.services.rate_limiter import limiter
 
 from app.config import get_settings
 from app.security import verify_github_signature
@@ -59,6 +64,16 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Ignition")
 
 settings = get_settings()
+settings.validate_production_safety(logger)
+
+# Rate limiting (previously absent entirely — /webhooks/github and
+# /auth/github/login were both unauthenticated-reachable and completely
+# unthrottled). The Limiter instance itself lives in
+# app/services/rate_limiter.py (see that module's docstring for why, and
+# for the storage_uri tradeoff) — this just wires it into the app.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 # Constructed once here, at module import (same lifecycle as ast_client/
 # graph in app/services/review_pipeline.py) — /healthz's LLM reachability
 # check (app/services/health_checks.py) is this process's only caller, but
@@ -92,6 +107,7 @@ app.add_middleware(
 
 
 @app.post("/webhooks/github", status_code=202)
+@limiter.limit(settings.webhook_rate_limit)
 async def github_webhook(request: Request, _: None = Depends(verify_github_signature)):
     payload = await request.json()
     delivery_id = request.headers.get("X-GitHub-Delivery")
@@ -103,7 +119,27 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # possible so even the malformed-payload rejection below is traceable.
     correlation_id = delivery_id or str(uuid.uuid4())
     set_correlation_id(correlation_id)
-    logger.info("Webhook received", extra={"delivery_id": delivery_id})
+
+    # GitHub App webhooks aren't only ever "pull_request" — "ping" (sent
+    # once when the webhook is first configured) and "installation"/
+    # "installation_repositories" (app installed/uninstalled/repos added or
+    # removed) all land on this same URL if the App is subscribed to them.
+    # Previously any non-pull_request delivery fell straight into
+    # PullRequestWebhook.model_validate below and was rejected as a 422
+    # "malformed payload" — technically true but misleading, since nothing
+    # was actually malformed, this endpoint just didn't know any other
+    # event existed. GitHub retries a failing (4xx/5xx) delivery on its own
+    # schedule, so treat these explicitly as recognized-but-not-actionable
+    # for now (repo registration on install is a real feature gap, tracked
+    # separately — not silently pretending it's handled here).
+    event_type = request.headers.get("X-GitHub-Event", "pull_request")
+    logger.info("Webhook received", extra={"delivery_id": delivery_id, "event_type": event_type})
+    if event_type not in ("pull_request", "ping"):
+        logger.info("Webhook event type not actionable, acknowledging without processing",
+                     extra={"delivery_id": delivery_id, "event_type": event_type})
+        return {"status": "ignored", "event": event_type}
+    if event_type == "ping":
+        return {"status": "pong"}
 
     try:
         event = PullRequestWebhook.model_validate(payload)
@@ -135,8 +171,8 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
             title=f"PR #{event.pull_request.number}",
-            author="unknown",
-            branch="main",
+            author=event.pull_request.author_login,
+            branch=event.pull_request.head_branch,
             commit_sha=event.pull_request.head_sha,
             installation_id=event.installation.id,
             correlation_id=correlation_id,

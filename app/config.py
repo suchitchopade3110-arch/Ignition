@@ -2,6 +2,7 @@
 Environment variables & API keys, loaded once and cached.
 Keep ALL external config here — no os.getenv() calls scattered through the codebase.
 """
+import logging
 from functools import lru_cache
 from pathlib import Path
 from pydantic import BaseModel
@@ -22,6 +23,13 @@ class Settings(BaseModel):
     `model_validator` instead so every `os.getenv()` call happens inside
     `Settings()`, i.e. after `load_dotenv()` above has executed.
     """
+    # Deployment environment: "development" (default) | "staging" |
+    # "production". Nothing gated on this before — there was no
+    # "is this production" signal anywhere in the codebase to hang a hard
+    # requirement on (e.g. forcing secure cookies), so it stayed a soft
+    # default. This is that signal. See validate_production_safety below.
+    app_env: str = "development"
+
     # GitHub
     github_app_id: str = ""
     github_private_key: str = ""
@@ -75,8 +83,17 @@ class Settings(BaseModel):
     hallucination_retry_cap: int = 3
     review_latency_budget_seconds: int = 60
 
+    # Rate limiting (slowapi/limits). storage_uri defaults to in-process
+    # memory:// — see the comment on Limiter construction in app/main.py
+    # for why that's the right default until this runs multi-instance.
+    rate_limit_storage_uri: str = "memory://"
+    default_rate_limit: str = "300/minute"
+    webhook_rate_limit: str = "120/minute"
+    auth_rate_limit: str = "20/minute"
+
     def __init__(self, **kwargs):
         super().__init__(
+            app_env=kwargs.get("app_env", os.getenv("APP_ENV", "development")),
             github_app_id=kwargs.get("github_app_id", os.getenv("GITHUB_APP_ID", "")),
             github_private_key=kwargs.get("github_private_key", os.getenv("GITHUB_PRIVATE_KEY", "")),
             github_webhook_secret=kwargs.get("github_webhook_secret", os.getenv("GITHUB_WEBHOOK_SECRET", "")),
@@ -97,7 +114,51 @@ class Settings(BaseModel):
             allowed_origins=kwargs.get("allowed_origins", os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")),
             hallucination_retry_cap=int(kwargs.get("hallucination_retry_cap", os.getenv("HALLUCINATION_RETRY_CAP", "3"))),
             review_latency_budget_seconds=int(kwargs.get("review_latency_budget_seconds", os.getenv("REVIEW_LATENCY_BUDGET_SECONDS", "60"))),
+            rate_limit_storage_uri=kwargs.get("rate_limit_storage_uri", os.getenv("RATE_LIMIT_STORAGE_URI", "memory://")),
+            default_rate_limit=kwargs.get("default_rate_limit", os.getenv("DEFAULT_RATE_LIMIT", "300/minute")),
+            webhook_rate_limit=kwargs.get("webhook_rate_limit", os.getenv("WEBHOOK_RATE_LIMIT", "120/minute")),
+            auth_rate_limit=kwargs.get("auth_rate_limit", os.getenv("AUTH_RATE_LIMIT", "20/minute")),
         )
+
+    def validate_production_safety(self, logger: "logging.Logger") -> None:
+        """
+        Called once at process startup (app/main.py, app/worker.py) — not a
+        pydantic validator, deliberately: this needs to *log* through the
+        app's own configured logger (app/services/logging_config.py), not
+        raise during Settings() construction where nothing has configured
+        logging yet and a hard failure would take down local dev for a
+        misconfigured-but-harmless default.
+
+        APP_ENV is opt-in (defaults to "development"), so this is a no-op
+        until an operator explicitly sets APP_ENV=production — at which
+        point known-unsafe defaults are corrected in place (the cookie
+        flag) or loudly flagged (CORS still pointing at localhost only),
+        rather than silently shipping an insecure default to production.
+        """
+        if self.app_env != "production":
+            return
+
+        if not self.session_cookie_secure:
+            logger.warning(
+                "APP_ENV=production but SESSION_COOKIE_SECURE=false — session "
+                "cookies would be sent over plain HTTP. Forcing secure=true; "
+                "set SESSION_COOKIE_SECURE=true explicitly to silence this."
+            )
+            self.session_cookie_secure = True
+
+        if self.allowed_origins_list == ["http://localhost:3000"]:
+            logger.warning(
+                "APP_ENV=production but ALLOWED_ORIGINS is still the local-dev "
+                "default (http://localhost:3000) — CORS will reject every real "
+                "browser origin. Set ALLOWED_ORIGINS to your deployed frontend's "
+                "origin(s)."
+            )
+
+        if not self.github_webhook_secret:
+            logger.warning(
+                "APP_ENV=production but GITHUB_WEBHOOK_SECRET is unset — "
+                "verify_github_signature will reject every webhook delivery."
+            )
 
 
 @lru_cache
