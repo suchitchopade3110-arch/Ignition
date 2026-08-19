@@ -40,15 +40,33 @@ included anywhere here.
   `/webhooks/github` POST. This is the only thing stopping an unsigned
   request from anyone who finds that URL from being treated as a real
   GitHub event.
-- **To rotate:**
-  1. GitHub → Developer settings → GitHub Apps → your app → **Webhook**
-     section → **Change secret**, or generate a new random value yourself
-     (`openssl rand -hex 32`) and paste it into the same field.
-  2. Update `GITHUB_WEBHOOK_SECRET` in `.env` to match exactly.
-  3. Save on GitHub's side first or your side first doesn't matter much,
-     but there's a window between the two updates where deliveries will
-     401 — expected and harmless (GitHub retries webhook deliveries).
-  4. Restart the backend.
+- **To rotate (zero-downtime, recommended):** `verify_github_signature`
+  (`app/security.py`) accepts a delivery signed with either
+  `GITHUB_WEBHOOK_SECRET` or `GITHUB_WEBHOOK_SECRET_PREVIOUS` — this is
+  what makes a grace-period rotation possible instead of the old
+  drop-webhooks-during-the-switch approach below.
+  1. Generate a new random value yourself (`openssl rand -hex 32`) — don't
+     use GitHub's own "Change secret" button for this method, since that
+     changes GitHub's side immediately with no grace period on its own.
+  2. Set `GITHUB_WEBHOOK_SECRET_PREVIOUS` in `.env` to the CURRENT
+     (outgoing) `GITHUB_WEBHOOK_SECRET` value, and set
+     `GITHUB_WEBHOOK_SECRET` itself to the new value. Restart the backend.
+     At this point both the old and new secrets verify successfully.
+  3. GitHub → Developer settings → GitHub Apps → your app → **Webhook**
+     section → **Change secret** → paste the same new value from step 1.
+  4. Watch the logs for `"Webhook verified against
+     GITHUB_WEBHOOK_SECRET_PREVIOUS"` warnings — once a few minutes pass
+     with none (GitHub has fully switched to signing with the new secret),
+     rotation is confirmed complete.
+  5. Unset `GITHUB_WEBHOOK_SECRET_PREVIOUS` in `.env` and restart the
+     backend again. Leaving it set indefinitely keeps the old secret valid
+     forever, which defeats the point of rotating it.
+- **To rotate (simple, brief downtime):** skip the PREVIOUS-secret dance —
+  change GitHub's side and `.env`'s `GITHUB_WEBHOOK_SECRET` to the same new
+  value, in either order, and restart. There's a window between the two
+  updates where deliveries 401 — expected and harmless (GitHub retries
+  webhook deliveries) — but genuinely simpler if a few dropped/retried
+  deliveries during rotation are fine for your use case.
 - **If not rotated in time:** no expiry; rotate on suspected compromise.
   Until rotated, a leaked secret lets someone forge webhook payloads that
   the backend will accept as genuine GitHub events, including triggering
@@ -123,6 +141,24 @@ included anywhere here.
   themselves — the opaque tokens in the `sessions` table — aren't
   long-lived static secrets like the ones above; they expire on their own
   per `SESSION_TTL_SECONDS` and are already scoped per-user.)
+
+## CSRF_COOKIE_NAME / CSRF_HEADER_NAME
+
+- Configuration, not secrets — these just name the cookie/header the
+  double-submit CSRF check (`app/security.py::verify_csrf_token`) looks
+  for, they aren't themselves a credential. No rotation needed. The CSRF
+  *token value* is a fresh random value issued per login (same as a
+  session ID) and expires with the session it rides alongside — nothing to
+  manually rotate there either.
+
+## METRICS_ENABLED
+
+- Configuration, not a secret. `GET /metrics` is unauthenticated by design
+  (a Prometheus scraper needs to reach it without a session — same
+  reasoning as `/healthz`), so nothing here is sensitive enough to warrant
+  a credential in the first place. If your deployment considers metric
+  values sensitive, set this `false` or restrict the route at the network/
+  ingress layer — there's no in-app auth on this endpoint to rotate.
 
 ---
 

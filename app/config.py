@@ -34,6 +34,14 @@ class Settings(BaseModel):
     github_app_id: str = ""
     github_private_key: str = ""
     github_webhook_secret: str = ""
+    # Set only during a webhook-secret rotation, to the OUTGOING secret —
+    # verify_github_signature (app/security.py) accepts either while this
+    # is set, so rotating GITHUB_WEBHOOK_SECRET doesn't drop deliveries
+    # during the window between updating GitHub's side and this app's.
+    # See docs/SECRET_ROTATION.md. Unset again once rotation is confirmed
+    # complete — leaving it set indefinitely just means a compromised old
+    # secret stays valid.
+    github_webhook_secret_previous: str = ""
 
     # GitHub OAuth (Sign in with GitHub) — separate credential pair from the
     # App's private key above. Used only for user login/session, never for
@@ -45,6 +53,18 @@ class Settings(BaseModel):
     session_cookie_name: str = "ignition_session"
     session_ttl_seconds: int = 60 * 60 * 24 * 7  # 7 days
     session_cookie_secure: bool = False  # set True behind HTTPS in prod
+
+    # CSRF double-submit cookie (see app/security.py::verify_csrf_token).
+    # Deliberately NOT httponly — the frontend's own JS must be able to
+    # read it to echo it back as a header.
+    csrf_cookie_name: str = "ignition_csrf_token"
+    csrf_header_name: str = "X-CSRF-Token"
+
+    # Prometheus /metrics endpoint (app/services/metrics.py). Unauthenticated
+    # like /healthz — same reasoning: a scraper needs to reach it without a
+    # session. Defaults on; set false to omit the endpoint entirely rather
+    # than exposing operational metrics on a deployment that doesn't want them.
+    metrics_enabled: bool = True
 
     # Used to build the OAuth redirect_uri and the post-login redirect target
     backend_base_url: str = "http://localhost:8000"
@@ -97,11 +117,17 @@ class Settings(BaseModel):
             github_app_id=kwargs.get("github_app_id", os.getenv("GITHUB_APP_ID", "")),
             github_private_key=kwargs.get("github_private_key", os.getenv("GITHUB_PRIVATE_KEY", "")),
             github_webhook_secret=kwargs.get("github_webhook_secret", os.getenv("GITHUB_WEBHOOK_SECRET", "")),
+            github_webhook_secret_previous=kwargs.get(
+                "github_webhook_secret_previous", os.getenv("GITHUB_WEBHOOK_SECRET_PREVIOUS", "")
+            ),
             github_client_id=kwargs.get("github_client_id", os.getenv("GITHUB_CLIENT_ID", "")),
             github_client_secret=kwargs.get("github_client_secret", os.getenv("GITHUB_CLIENT_SECRET", "")),
             session_cookie_name=kwargs.get("session_cookie_name", os.getenv("SESSION_COOKIE_NAME", "ignition_session")),
             session_ttl_seconds=int(kwargs.get("session_ttl_seconds", os.getenv("SESSION_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
             session_cookie_secure=str(kwargs.get("session_cookie_secure", os.getenv("SESSION_COOKIE_SECURE", "false"))).lower() in ("1", "true", "yes"),
+            csrf_cookie_name=kwargs.get("csrf_cookie_name", os.getenv("CSRF_COOKIE_NAME", "ignition_csrf_token")),
+            csrf_header_name=kwargs.get("csrf_header_name", os.getenv("CSRF_HEADER_NAME", "X-CSRF-Token")),
+            metrics_enabled=str(kwargs.get("metrics_enabled", os.getenv("METRICS_ENABLED", "true"))).lower() in ("1", "true", "yes"),
             backend_base_url=kwargs.get("backend_base_url", os.getenv("BACKEND_BASE_URL", "http://localhost:8000")),
             frontend_base_url=kwargs.get("frontend_base_url", os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")),
             llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "qwen")),

@@ -11,22 +11,25 @@ Responsibilities:
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, APIRouter, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
 from postgrest.exceptions import APIError
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.services.rate_limiter import limiter
+from app.services import metrics
 
 from app.config import get_settings
-from app.security import verify_github_signature
+from app.security import verify_github_signature, verify_csrf_token
 from app.schemas.github import PullRequestWebhook
 from app.services.redis_client import get_arq_pool
 from app.services.review_pipeline import review_repo, repo_repo
@@ -72,7 +75,14 @@ settings.validate_production_safety(logger)
 # app/services/rate_limiter.py (see that module's docstring for why, and
 # for the storage_uri tradeoff) — this just wires it into the app.
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def _rate_limit_exceeded_handler_with_metric(request: Request, exc: RateLimitExceeded):
+    metrics.rate_limit_exceeded_total.labels(path=request.url.path).inc()
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler_with_metric)
 app.add_middleware(SlowAPIMiddleware)
 # Constructed once here, at module import (same lifecycle as ast_client/
 # graph in app/services/review_pipeline.py) — /healthz's LLM reachability
@@ -104,6 +114,49 @@ app.add_middleware(
 # above rather than constructed here — that module is the one source of
 # truth now that review execution happens in the Arq worker process
 # (app/worker.py), not inside this FastAPI process.
+
+
+@app.middleware("http")
+async def _record_http_metrics(request: Request, call_next):
+    """
+    Records ignition_http_requests_total / ignition_http_request_duration_seconds
+    for every request. Uses request.scope["route"].path (the route
+    TEMPLATE, e.g. "/api/reviews/{review_id}") rather than
+    request.url.path — the raw path would create a distinct label series
+    per review_id/repo_id ever requested, which is exactly the
+    high-cardinality-label mistake Prometheus's own docs warn against and
+    would make this endpoint grow without bound over the app's lifetime.
+    Falls back to the raw path only for genuinely unmatched routes (404s),
+    where there's no template to use and the raw path is bounded by
+    "whatever a client tried," not by real traffic volume.
+    """
+    start = time.monotonic()
+    response = await call_next(request)
+    duration = time.monotonic() - start
+
+    route = request.scope.get("route")
+    path_label = route.path if route is not None else request.url.path
+
+    metrics.http_requests_total.labels(
+        method=request.method, path=path_label, status=str(response.status_code)
+    ).inc()
+    metrics.http_request_duration_seconds.labels(method=request.method, path=path_label).observe(duration)
+    return response
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """
+    Prometheus scrape target. Unauthenticated like /healthz — a scraper
+    needs to reach it without a session (same reasoning as /healthz's own
+    docstring). Gated on METRICS_ENABLED (app/config.py) rather than always
+    mounted, so a deployment that doesn't want operational metrics exposed
+    can omit the endpoint entirely instead of relying on network-level
+    blocking alone.
+    """
+    if not settings.metrics_enabled:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def _handle_installation_event(event_type: str, payload: dict) -> None:
@@ -195,22 +248,27 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     logger.info("Webhook received", extra={"delivery_id": delivery_id, "event_type": event_type})
     if event_type in ("installation", "installation_repositories"):
         _handle_installation_event(event_type, payload)
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="processed").inc()
         return {"status": "processed", "event": event_type}
     if event_type not in ("pull_request", "ping"):
         logger.info("Webhook event type not actionable, acknowledging without processing",
                      extra={"delivery_id": delivery_id, "event_type": event_type})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
         return {"status": "ignored", "event": event_type}
     if event_type == "ping":
+        metrics.webhook_events_total.labels(event_type="ping", outcome="processed").inc()
         return {"status": "pong"}
 
     try:
         event = PullRequestWebhook.model_validate(payload)
     except Exception as exc:
         logger.warning("Malformed webhook payload rejected", extra={"error": str(exc)})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="rejected").inc()
         raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {exc}")
 
     if event.action not in {"opened", "synchronize", "reopened"}:
         logger.info("Webhook action ignored", extra={"action": event.action})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
         return {"status": "ignored", "action": event.action}
 
     review_id = str(uuid.uuid4())
@@ -262,6 +320,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
                     "existing_review_id": existing["id"] if existing else None,
                 },
             )
+            metrics.webhook_events_total.labels(event_type=event_type, outcome="duplicate").inc()
             return {
                 "status": "duplicate",
                 "reviewId": existing["id"] if existing else None,
@@ -283,6 +342,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     job = await pool.enqueue_job("run_review_job", event.model_dump(mode="json"), review_id, correlation_id)
     review_repo.update_review(review_id, {"job_id": job.job_id if job else None})
     logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
+    metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
 
     return {"reviewId": review_id, "status": "queued"}
 
@@ -311,7 +371,7 @@ async def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_
     return RepositorySettings(**repo_repo.get_or_create_settings(repo_id))
 
 
-@api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings)
+@api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings, dependencies=[Depends(verify_csrf_token)])
 async def update_repo_settings(
     repo_id: str, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
 ):
@@ -368,11 +428,17 @@ async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review
 @api_router.get("/hitl/pending", response_model=list[HitlItem])
 async def get_hitl_pending():
     pending = review_repo.list_hitl_pending()
+    # Set (not incremented) from this query's own result each time it's
+    # polled — see the metric's own docstring (app/services/metrics.py) for
+    # why that's deliberate: it tracks the dashboard's actual source of
+    # truth instead of a separately-maintained running count that could
+    # drift from it.
+    metrics.hitl_pending_gauge.set(len(pending))
     now_str = datetime.utcnow().isoformat() + "Z"
     return [HitlItem(**{**r, "waiting_since": r.get("created_at", now_str)}) for r in pending]
 
 
-@api_router.post("/hitl/{review_id}/approve", response_model=dict)
+@api_router.post("/hitl/{review_id}/approve", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
@@ -435,6 +501,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     await stream_manager.publish(
         review_id, {"type": "review.completed", "reviewId": review_id, "status": "completed"}
     )
+    metrics.hitl_resolutions_total.labels(outcome="approved").inc()
     return {
         "success": True,
         "github_comment_url": github_response.get("html_url"),
@@ -442,7 +509,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     }
 
 
-@api_router.post("/hitl/{review_id}/reject", response_model=dict)
+@api_router.post("/hitl/{review_id}/reject", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
@@ -454,6 +521,7 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
     await stream_manager.publish(
         review_id, {"type": "review.completed", "reviewId": review_id, "status": "rejected"}
     )
+    metrics.hitl_resolutions_total.labels(outcome="rejected").inc()
     return {"success": True}
 
 

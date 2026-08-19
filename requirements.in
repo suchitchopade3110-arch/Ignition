@@ -15,3 +15,4 @@ sentence-transformers>=3.0
 arq>=0.28
 redis>=5.0
 slowapi>=0.1.9
+prometheus-client>=0.20

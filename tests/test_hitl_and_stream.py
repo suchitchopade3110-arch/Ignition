@@ -7,7 +7,9 @@ the whole live-progress dashboard depends on).
 Auth is bypassed via FastAPI's dependency_overrides rather than exercising
 the real GitHub-OAuth-backed check_repo_access — that path is already
 covered directly in tests/test_auth_access.py; these tests are about what
-each route does once past auth, not auth itself.
+each route does once past auth, not auth itself. The CSRF dependency
+(app/security.py::verify_csrf_token) is overridden the same way here for
+the same reason — it's covered directly in tests/test_csrf.py.
 """
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +18,7 @@ import pytest
 
 import app.main as main_module
 from app.auth import AuthUser, get_current_user, require_review_repo_access
+from app.security import verify_csrf_token
 from app.services.review_pipeline import review_repo
 from app.services.stream_manager import stream_manager
 
@@ -26,9 +29,11 @@ _FAKE_USER = AuthUser(id="u1", github_id=1, login="octocat")
 def override_auth():
     main_module.app.dependency_overrides[get_current_user] = lambda: _FAKE_USER
     main_module.app.dependency_overrides[require_review_repo_access] = lambda: _FAKE_USER
+    main_module.app.dependency_overrides[verify_csrf_token] = lambda: None
     yield
     main_module.app.dependency_overrides.pop(get_current_user, None)
     main_module.app.dependency_overrides.pop(require_review_repo_access, None)
+    main_module.app.dependency_overrides.pop(verify_csrf_token, None)
 
 
 @pytest.fixture

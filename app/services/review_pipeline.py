@@ -13,12 +13,14 @@ so there's one source of truth instead of two.
 """
 import asyncio
 import logging
+import time
 from datetime import datetime
 
 from app.config import get_settings
 from app.schemas.github import PullRequestWebhook
 from app.services.ast_client import ASTClient
 from app.services.stream_manager import stream_manager
+from app.services import metrics
 from app.graph.workflow import build_graph
 from app.graph.state import ReviewState
 from app.repositories.dashboard import ReviewRepository, RepoRepository
@@ -119,6 +121,15 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     set_correlation_id(correlation_id)
     event = PullRequestWebhook.model_validate(event_payload)
     logger.info("Starting background review", extra={"review_id": review_id})
+    _job_start_time = time.monotonic()
+
+    def _record_terminal_metric(status: str) -> None:
+        """Called from every terminal exit point below (completed, failed,
+        cancelled, timed-out-to-HITL) — one place recording both the
+        outcome counter and the wall-clock duration histogram, so no exit
+        path can update review status without also being counted here."""
+        metrics.reviews_completed_total.labels(status=status).inc()
+        metrics.review_duration_seconds.observe(time.monotonic() - _job_start_time)
 
     # 1. Reconstruct pull request info from GitHub Integration
     title = f"PR #{event.pull_request.number}"
@@ -451,6 +462,16 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "status": "waiting_hitl",
                             },
                         )
+                        # Records the end of the AUTOMATED portion, not the
+                        # review's full lifetime — a human's later
+                        # /api/hitl/{id}/approve or /reject call
+                        # (app/main.py) is what actually resolves it, and is
+                        # counted separately via hitl_resolutions_total.
+                        # Re-recording this same job's duration there too
+                        # would double count review_duration_seconds against
+                        # however long the review sat waiting on a human,
+                        # which isn't graph execution time.
+                        _record_terminal_metric("waiting_hitl")
 
                     elif node_name == "agent_4_autofix":
                         agents_progress["agent_4_autofix"]["status"] = "completed"
@@ -499,6 +520,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "status": "completed",
                             },
                         )
+                        _record_terminal_metric("completed")
 
                     elif node_name == "direct_rejection":
                         review_repo.update_review(
@@ -516,6 +538,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "status": "completed",
                             },
                         )
+                        _record_terminal_metric("completed")
 
         try:
             await asyncio.wait_for(_stream_graph(), timeout=settings.review_latency_budget_seconds)
@@ -549,6 +572,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                     "status": "waiting_hitl",
                 },
             )
+            _record_terminal_metric("timed_out")
             return
 
     except asyncio.CancelledError:
@@ -577,6 +601,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                 "status": "failed",
             },
         )
+        _record_terminal_metric("cancelled")
         raise
     except Exception as exc:
         logger.exception("LangGraph execution failed: %s", exc)
@@ -589,3 +614,4 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                 "status": "failed",
             },
         )
+        _record_terminal_metric("failed")
