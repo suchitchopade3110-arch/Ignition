@@ -102,9 +102,11 @@ async def test_webhook_ping_event_acknowledged_without_processing():
 
 
 @pytest.mark.asyncio
-async def test_webhook_installation_event_ignored_not_rejected():
+async def test_webhook_installation_event_processed_not_rejected():
     """Previously this event type would hit PullRequestWebhook.model_validate
-    and 422 — it's a real GitHub event, not a malformed payload."""
+    and 422 — it's a real GitHub event, not a malformed payload. Actual
+    register/deregister behavior is covered in tests/test_installation_webhook.py;
+    this just asserts the webhook route itself doesn't 422 on it."""
     body = json.dumps({"action": "created", "installation": {"id": 42}}).encode()
     signature = _sign(body)
 
@@ -117,7 +119,26 @@ async def test_webhook_installation_event_ignored_not_rejected():
         )
 
     assert response.status_code == 202
-    assert response.json() == {"status": "ignored", "event": "installation"}
+    assert response.json() == {"status": "processed", "event": "installation"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_unactionable_event_type_ignored():
+    """An event type this app has no handling for at all (e.g. `issues`)
+    is acknowledged, not rejected."""
+    body = json.dumps({"action": "opened"}).encode()
+    signature = _sign(body)
+
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/github", content=body,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": signature,
+                     "X-GitHub-Delivery": "issues-test", "X-GitHub-Event": "issues"},
+        )
+
+    assert response.status_code == 202
+    assert response.json() == {"status": "ignored", "event": "issues"}
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "start": "bun run server.ts",
-    "dev": "bun --watch server.ts"
+    "dev": "bun --watch server.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "ts-morph": "^23.0.0",

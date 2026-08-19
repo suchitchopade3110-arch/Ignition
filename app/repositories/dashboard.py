@@ -305,6 +305,21 @@ class RepoRepository:
         self.get_or_create_settings(repo_id, repo_full_name)
         return persisted
 
+    def set_repo_installed(self, repo_full_name: str, installed: bool) -> None:
+        """
+        Driven by the "installation"/"installation_repositories" webhook
+        events (app/main.py::github_webhook) — previously those events were
+        acknowledged but not acted on at all. Deliberately update-only, not
+        upsert: an "installed" (repositories_removed) event for a repo this
+        app was never told about via a real pull_request webhook has no row
+        to update yet, and that's fine — nothing to mark uninstalled. A
+        fresh "added"/"created" event for a genuinely new repo goes through
+        get_or_create_repo first (which the webhook handler calls before
+        this), so the row exists by the time this runs for that case.
+        """
+        repo_id = repo_full_name.replace("/", "_")
+        self._db.table(self.TABLE).update({"installed": installed}).eq("id", repo_id).execute()
+
     def list_repos(self) -> list[dict]:
         repos_res = self._db.table(self.TABLE).select("*").execute()
         repos = repos_res.data or []
@@ -348,7 +363,12 @@ class RepoRepository:
                 "lastReviewDate": last_review_date,
                 "acsScore": acs_score,
                 "status": status,
-                "language": r.get("language", "TypeScript")
+                "language": r.get("language", "TypeScript"),
+                # Existing rows created before migrations_011 have no
+                # `installed` column value cached here yet at the Python
+                # level if the DB migration hasn't run — default True
+                # matches the migration's own column default/backfill.
+                "installed": r.get("installed", True),
             })
         return results
 

@@ -26,6 +26,10 @@ class Repository(CamelModel):
     acs_score: float
     status: Literal["healthy", "warning", "critical"]
     language: str
+    # Whether the GitHub App is currently installed on this repo — driven by
+    # "installation"/"installation_repositories" webhook events. True for
+    # every repo that predates this field (see migrations_011's default).
+    installed: bool = True
 
 class Review(CamelModel):
     id: str
