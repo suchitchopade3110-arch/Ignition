@@ -36,6 +36,24 @@ import {
 
 type UnauthorizedHandler = () => void
 
+// Must match app/config.py's csrf_cookie_name/csrf_header_name defaults
+// (CSRF_COOKIE_NAME / CSRF_HEADER_NAME env vars on the backend) — this is
+// the frontend half of the double-submit-cookie CSRF check
+// (app/security.py::verify_csrf_token). The cookie itself is set
+// non-httponly specifically so this can read it; see app/auth.py's
+// github_callback for where it's issued.
+const CSRF_COOKIE_NAME = "ignition_csrf_token"
+const CSRF_HEADER_NAME = "X-CSRF-Token"
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
+
+function readCsrfCookie(): string | null {
+  if (typeof document === "undefined") return null // SSR — no cookie to read
+  const match = document.cookie.match(
+    new RegExp(`(?:^|; )${CSRF_COOKIE_NAME}=([^;]*)`)
+  )
+  return match ? decodeURIComponent(match[1]) : null
+}
+
 class ApiClient {
   private unauthorizedHandlers: UnauthorizedHandler[] = []
 
@@ -140,6 +158,19 @@ class ApiClient {
       }
     }
 
+    const method = (fetchOptions.method ?? "GET").toUpperCase()
+    const csrfHeaders: Record<string, string> = {}
+    if (MUTATING_METHODS.has(method)) {
+      const csrfToken = readCsrfCookie()
+      if (csrfToken) {
+        csrfHeaders[CSRF_HEADER_NAME] = csrfToken
+      }
+      // No cookie yet (not logged in, or a pre-CSRF-fix session) — let the
+      // request go through and surface the backend's own 403 rather than
+      // failing client-side; that keeps this additive instead of a hard
+      // dependency on the cookie's exact presence/name matching.
+    }
+
     try {
       const response = await fetch(url, {
         ...fetchOptions,
@@ -147,6 +178,7 @@ class ApiClient {
         credentials: "include", // Send session cookie across requests
         headers: {
           "Content-Type": "application/json",
+          ...csrfHeaders,
           ...fetchOptions.headers,
         },
       })

@@ -74,6 +74,7 @@ No finding reaches you unverified. No decision to escalate is a guess. And if so
 | Data & vector storage | Supabase (Postgres) + pgvector |
 | GitHub integration | PyGithub |
 | Rate limiting | [slowapi](https://github.com/laurentS/slowapi) on the webhook, OAuth login, and every `/api/*` route |
+| Metrics | Prometheus (`prometheus_client`) at `GET /metrics` — HTTP, webhook, review-lifecycle, and HITL counters |
 | Frontend / dashboard | Next.js, Tailwind, shadcn/ui |
 
 ## Deploying to production
@@ -91,6 +92,21 @@ rate-limit / cache-size knobs (`RATE_LIMIT_STORAGE_URI`,
 actually needs to function — Supabase, the AST analyzer, the LLM
 provider, and Redis (the Arq queue + SSE backbone) — not just "is the
 process up."
+
+`GET /metrics` is a Prometheus scrape target (unauthenticated, like
+`/healthz`) — HTTP request count/latency by route, webhook delivery
+outcomes, review completion counts/duration by status, and HITL
+resolution counts. Set `METRICS_ENABLED=false` to omit the endpoint.
+
+Cookie-authenticated, state-changing `/api/*` routes (HITL approve/reject,
+repo settings) are protected by a CSRF double-submit cookie in addition to
+the session cookie's own `SameSite=Lax` — see
+`app/security.py::verify_csrf_token`. The frontend api-client handles this
+automatically; a non-browser client needs to echo the `ignition_csrf_token`
+cookie back as an `X-CSRF-Token` header on those requests.
+
+`GITHUB_WEBHOOK_SECRET` supports zero-downtime rotation via
+`GITHUB_WEBHOOK_SECRET_PREVIOUS` — see `docs/SECRET_ROTATION.md`.
 
 ## What v1 deliberately doesn't do
 

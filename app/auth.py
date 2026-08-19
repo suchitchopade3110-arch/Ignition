@@ -264,6 +264,21 @@ async def github_callback(
         secure=settings.session_cookie_secure,
         samesite="lax",
     )
+    # CSRF double-submit token (see app/security.py::verify_csrf_token) —
+    # issued alongside the session, same lifetime, but deliberately NOT
+    # httponly: the frontend's own JS reads this one and echoes it back as
+    # a header on mutating requests. Not a signed/derived value on purpose
+    # — a plain random token is exactly what the double-submit pattern
+    # needs, and deriving it from the session would just make it
+    # predictable from other data without adding any real protection.
+    response.set_cookie(
+        settings.csrf_cookie_name,
+        secrets.token_urlsafe(32),
+        max_age=settings.session_ttl_seconds,
+        httponly=False,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+    )
     return response
 
 
@@ -274,6 +289,7 @@ async def logout(request: Request, response: Response):
     if session_id:
         _auth_repo.delete_session(session_id)
     response.delete_cookie(settings.session_cookie_name)
+    response.delete_cookie(settings.csrf_cookie_name)
     return {"status": "ok"}
 
 
