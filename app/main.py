@@ -106,6 +106,68 @@ app.add_middleware(
 # (app/worker.py), not inside this FastAPI process.
 
 
+def _handle_installation_event(event_type: str, payload: dict) -> None:
+    """
+    Registers/deregisters repos in response to the GitHub App being
+    installed, uninstalled, or having its repo access changed —
+    previously these events were only acknowledged (202), never acted on,
+    so the dashboard's repo list only ever grew via a real pull_request
+    webhook and never reflected an uninstall at all.
+
+    Deliberately does NOT delete rows or their review history on
+    uninstall — set_repo_installed just flips a flag (migrations_011),
+    which is far cheaper to get wrong than data loss. What "uninstalled"
+    means for the dashboard (hide it? show it grayed out?) is a frontend
+    decision, not something to bake into this handler by deleting data it
+    can't get back.
+
+    Synchronous, not async: repo_repo's Supabase client is sync (like
+    every other repo_repo call site in this file), and these events are
+    low-frequency/low-latency-sensitive enough not to need dispatching to
+    a background job the way review execution does.
+    """
+    if event_type == "installation":
+        action = payload.get("action")
+        repos = payload.get("repositories") or []
+        if action in ("created", "unsuspend"):
+            for repo in repos:
+                full_name = repo.get("full_name")
+                if not full_name:
+                    continue
+                repo_repo.get_or_create_repo(full_name)
+                repo_repo.set_repo_installed(full_name, True)
+            logger.info("Installation event: registered repos", extra={"action": action, "count": len(repos)})
+        elif action in ("deleted", "suspend"):
+            for repo in repos:
+                full_name = repo.get("full_name")
+                if full_name:
+                    repo_repo.set_repo_installed(full_name, False)
+            logger.info("Installation event: deregistered repos", extra={"action": action, "count": len(repos)})
+        else:
+            logger.info("Installation event action not actionable", extra={"action": action})
+
+    elif event_type == "installation_repositories":
+        action = payload.get("action")
+        for repo in payload.get("repositories_added") or []:
+            full_name = repo.get("full_name")
+            if not full_name:
+                continue
+            repo_repo.get_or_create_repo(full_name)
+            repo_repo.set_repo_installed(full_name, True)
+        for repo in payload.get("repositories_removed") or []:
+            full_name = repo.get("full_name")
+            if full_name:
+                repo_repo.set_repo_installed(full_name, False)
+        logger.info(
+            "Installation_repositories event processed",
+            extra={
+                "action": action,
+                "added": len(payload.get("repositories_added") or []),
+                "removed": len(payload.get("repositories_removed") or []),
+            },
+        )
+
+
 @app.post("/webhooks/github", status_code=202)
 @limiter.limit(settings.webhook_rate_limit)
 async def github_webhook(request: Request, _: None = Depends(verify_github_signature)):
@@ -128,12 +190,12 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # PullRequestWebhook.model_validate below and was rejected as a 422
     # "malformed payload" — technically true but misleading, since nothing
     # was actually malformed, this endpoint just didn't know any other
-    # event existed. GitHub retries a failing (4xx/5xx) delivery on its own
-    # schedule, so treat these explicitly as recognized-but-not-actionable
-    # for now (repo registration on install is a real feature gap, tracked
-    # separately — not silently pretending it's handled here).
+    # event existed.
     event_type = request.headers.get("X-GitHub-Event", "pull_request")
     logger.info("Webhook received", extra={"delivery_id": delivery_id, "event_type": event_type})
+    if event_type in ("installation", "installation_repositories"):
+        _handle_installation_event(event_type, payload)
+        return {"status": "processed", "event": event_type}
     if event_type not in ("pull_request", "ping"):
         logger.info("Webhook event type not actionable, acknowledging without processing",
                      extra={"delivery_id": delivery_id, "event_type": event_type})

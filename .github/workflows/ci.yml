@@ -19,6 +19,16 @@ name: CI
 # typecheck (tsc --noEmit), and unit tests (vitest, frontend/tests/*) —
 # previously not wired into CI at all despite existing in the repo, so a
 # broken build/type error/failing test there was invisible until deploy.
+#
+# The `ast-analyzer` job runs the Bun service's own unit tests (bun test,
+# ast-analyzer/analyzer.test.ts — the LRU project-cache eviction logic).
+#
+# The `docker-build` job builds both Dockerfiles (the combined
+# backend+worker image, and the AST analyzer's own image) — previously
+# nothing in CI verified either image actually builds; a broken Dockerfile
+# was only discoverable at deploy time. Build-only, no push: no registry
+# credentials are configured here (this repo has none), and catching a
+# broken build doesn't require one.
 on:
   pull_request:
   push:
@@ -81,3 +91,43 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+  ast-analyzer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ast-analyzer
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Typecheck
+        run: bunx tsc --noEmit
+
+      - name: Unit tests
+        run: bun test
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+
+      - name: Build AST analyzer image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ast-analyzer
+          push: false

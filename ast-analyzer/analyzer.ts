@@ -121,7 +121,10 @@ function maxCachedProjects(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_CACHED_PROJECTS;
 }
 
-function getOrCreateProject(
+// Exported for analyzer.test.ts — the LRU eviction behavior is real logic
+// worth testing directly rather than only indirectly through the full
+// analyzePullRequest pipeline (which needs a real/fake git or zip source).
+export function getOrCreateProject(
   repoKey: string,
   sourceDir: string,
   cache: Map<string, Project>
@@ -155,7 +158,7 @@ function getOrCreateProject(
   return project;
 }
 
-function evictLeastRecentlyUsed(cache: Map<string, Project>): void {
+export function evictLeastRecentlyUsed(cache: Map<string, Project>): void {
   const limit = maxCachedProjects();
   while (cache.size > limit) {
     const oldestKey = cache.keys().next().value;
