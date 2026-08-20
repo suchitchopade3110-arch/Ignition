@@ -8,7 +8,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "ts-morph": "^23.0.0",
+    "ts-morph": "^28.0.0",
     "dependency-cruiser": "^16.4.0",
     "elysia": "^1.1.0"
   },
