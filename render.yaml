@@ -1,0 +1,117 @@
+# Render Blueprint — see docs/DEPLOY_RENDER.md for the full walkthrough
+# (provisioning the GitHub App/OAuth App/Supabase project, filling in the
+# secret env vars below, and what to fix if your service names collide
+# with someone else's and Render suffixes your onrender.com hostnames).
+#
+# Topology: two services, not the four in docker-compose.yml. `backend`
+# runs docker-entrypoint.sh's existing single-container mode — the AST
+# analyzer, the Arq worker, and FastAPI as sibling processes in one
+# container, talking to a real Redis instead of each other directly. That
+# mode exists in this repo specifically for a "Railway/Render deploy
+# without separate services" (see the comment at the top of
+# docker-entrypoint.sh) — it's not a new deploy path invented for this
+# file, just the one already built for it, wired up.
+#
+# `frontend` is Next.js's own server (`next start`), not a static export —
+# the app has auth-gated SSR routes.
+
+services:
+  - type: redis
+    name: ignition-redis
+    plan: starter
+    ipAllowList: [] # internal only — nothing outside this Render account needs to reach it
+    maxmemoryPolicy: noeviction # Arq's job queue needs entries to persist, not get evicted under memory pressure
+
+  - type: web
+    name: ignition-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ignition-redis
+          property: connectionString
+      # Single-container mode: the AST service binds 127.0.0.1 inside this
+      # same container (see ast-analyzer/server.ts) — not a separate Render
+      # service, so this always points at localhost.
+      - key: AST_SERVICE_URL
+        value: http://localhost:4000
+      - key: METRICS_ENABLED
+        value: "true"
+      # Two *.onrender.com services (no custom domain) are cross-site per
+      # the Public Suffix List — Lax cookies never attach to the
+      # frontend's cross-origin fetch() calls. See app/config.py's
+      # session_cookie_samesite comment. Flip back to "lax" once/if
+      # backend+frontend move behind a shared custom domain.
+      - key: SESSION_COOKIE_SAMESITE
+        value: none
+      # BACKEND_BASE_URL, FRONTEND_BASE_URL and ALLOWED_ORIGINS all need
+      # the real onrender.com hostnames Render assigns on first deploy —
+      # see docs/DEPLOY_RENDER.md step 4. Placeholders below assume
+      # `ignition-backend`/`ignition-frontend` weren't already taken.
+      - key: BACKEND_BASE_URL
+        value: https://ignition-backend.onrender.com
+      - key: FRONTEND_BASE_URL
+        value: https://ignition-frontend.onrender.com
+      - key: ALLOWED_ORIGINS
+        value: https://ignition-frontend.onrender.com
+      # Starter plan runs a single instance, but pointing rate limiting at
+      # the same Redis (rather than the in-process memory:// default)
+      # means limits survive a restart/redeploy and are already correct
+      # if this ever scales past one instance.
+      - key: RATE_LIMIT_STORAGE_URI
+        fromService:
+          type: redis
+          name: ignition-redis
+          property: connectionString
+      # --- Secrets: fill these in via the Render dashboard after the
+      # first blueprint sync (sync: false means Render won't manage or
+      # overwrite them). See docs/DEPLOY_RENDER.md for where each comes
+      # from.
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: LLM_PROVIDER
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL_NAME
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+
+  - type: web
+    name: ignition-frontend
+    runtime: node
+    rootDir: frontend
+    plan: starter
+    buildCommand: npm ci && npm run build
+    # next start binds process.env.PORT itself — Render sets PORT, no
+    # -p flag needed.
+    startCommand: npm run start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # NEXT_PUBLIC_* vars are inlined at build time, not read at runtime
+      # — changing this after the first deploy needs a rebuild (Manual
+      # Deploy > Clear build cache & deploy), not just a restart. Same
+      # collision caveat as BACKEND_BASE_URL above.
+      - key: NEXT_PUBLIC_API_URL
+        value: https://ignition-backend.onrender.com/api
+      - key: NEXT_PUBLIC_DEMO_MODE
+        value: "false"

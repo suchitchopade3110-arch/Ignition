@@ -53,3 +53,21 @@ def test_no_warnings_when_production_config_is_sane(caplog):
     with caplog.at_level(logging.WARNING):
         s.validate_production_safety(logging.getLogger("test"))
     assert caplog.records == []
+
+
+def test_samesite_none_is_accepted_unchanged_for_cross_site_deploys(caplog):
+    # e.g. frontend and backend on two separate *.onrender.com subdomains
+    # with no shared registrable domain — a valid, deliberate choice.
+    s = _prod_settings(session_cookie_samesite="none")
+    with caplog.at_level(logging.WARNING):
+        s.validate_production_safety(logging.getLogger("test"))
+    assert s.session_cookie_samesite == "none"
+    assert not any("SAMESITE" in rec.message.upper() for rec in caplog.records)
+
+
+def test_invalid_samesite_value_falls_back_to_lax_with_a_warning(caplog):
+    s = _prod_settings(session_cookie_samesite="banana")
+    with caplog.at_level(logging.WARNING):
+        s.validate_production_safety(logging.getLogger("test"))
+    assert s.session_cookie_samesite == "lax"
+    assert any("SESSION_COOKIE_SAMESITE" in rec.message for rec in caplog.records)

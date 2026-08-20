@@ -1,3 +1,25 @@
+# sentence-transformers (below) pulls in torch as a transitive dependency.
+# This service runs CPU-only — the embedding model here is a small
+# sentence-transformer used for RAG similarity search (app/rag/
+# vector_store.py), never anything GPU-bound — but PyPI's default `torch`
+# wheel bundles the full CUDA toolkit as separate `nvidia-*` packages
+# (~3-5GB across ~15 packages: cublas, cudnn, cusolver, nccl, etc.), none
+# of which this process will ever load. That bloat turns into a real
+# problem on a PaaS build (Render, Railway, etc.): multi-GB image pulls,
+# slow builds, and on cheaper plans, a real chance of hitting a disk quota.
+# The extra index below serves torch's CPU-only wheels instead — same
+# API, no CUDA payload. Requires regenerating requirements.txt from a
+# network context that can actually reach download.pytorch.org (this
+# repo's CI runners can; some sandboxed dev environments can't) via:
+#   uv pip compile --generate-hashes --output-file=requirements.txt requirements.in
+# After regenerating, grep the result for `^nvidia-` — if anything still
+# matches, the resolver picked the CUDA build off PyPI instead of the CPU
+# build off the extra index (pip/uv don't strictly prioritize one index
+# over another for a same-named, same-version package), and torch needs
+# an explicit `==<version>+cpu` pin here to force it.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.13.0
+
 fastapi>=0.115
 uvicorn[standard]>=0.30
 langgraph>=0.2

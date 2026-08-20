@@ -53,6 +53,15 @@ class Settings(BaseModel):
     session_cookie_name: str = "ignition_session"
     session_ttl_seconds: int = 60 * 60 * 24 * 7  # 7 days
     session_cookie_secure: bool = False  # set True behind HTTPS in prod
+    # "lax" (default) works when the frontend and backend share a
+    # registrable domain (e.g. app.example.com + api.example.com, or both
+    # behind one reverse proxy) — the common case, and the safer default.
+    # Needs to become "none" (which requires secure=True) when they're on
+    # genuinely different sites, e.g. two separate *.onrender.com
+    # subdomains: those are cross-site per the Public Suffix List, so a Lax
+    # cookie is never attached to the frontend's cross-origin
+    # `fetch(..., credentials: "include")` calls and login silently loops.
+    session_cookie_samesite: str = "lax"
 
     # CSRF double-submit cookie (see app/security.py::verify_csrf_token).
     # Deliberately NOT httponly — the frontend's own JS must be able to
@@ -125,6 +134,7 @@ class Settings(BaseModel):
             session_cookie_name=kwargs.get("session_cookie_name", os.getenv("SESSION_COOKIE_NAME", "ignition_session")),
             session_ttl_seconds=int(kwargs.get("session_ttl_seconds", os.getenv("SESSION_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
             session_cookie_secure=str(kwargs.get("session_cookie_secure", os.getenv("SESSION_COOKIE_SECURE", "false"))).lower() in ("1", "true", "yes"),
+            session_cookie_samesite=kwargs.get("session_cookie_samesite", os.getenv("SESSION_COOKIE_SAMESITE", "lax")).lower(),
             csrf_cookie_name=kwargs.get("csrf_cookie_name", os.getenv("CSRF_COOKIE_NAME", "ignition_csrf_token")),
             csrf_header_name=kwargs.get("csrf_header_name", os.getenv("CSRF_HEADER_NAME", "X-CSRF-Token")),
             metrics_enabled=str(kwargs.get("metrics_enabled", os.getenv("METRICS_ENABLED", "true"))).lower() in ("1", "true", "yes"),
@@ -171,6 +181,14 @@ class Settings(BaseModel):
                 "set SESSION_COOKIE_SECURE=true explicitly to silence this."
             )
             self.session_cookie_secure = True
+
+        if self.session_cookie_samesite not in ("lax", "strict", "none"):
+            logger.warning(
+                "SESSION_COOKIE_SAMESITE=%r is not a valid SameSite value "
+                "(lax|strict|none) — falling back to 'lax'.",
+                self.session_cookie_samesite,
+            )
+            self.session_cookie_samesite = "lax"
 
         if self.allowed_origins_list == ["http://localhost:3000"]:
             logger.warning(

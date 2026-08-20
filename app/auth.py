@@ -195,7 +195,7 @@ async def github_login(request: Request):
         max_age=600,
         httponly=True,
         secure=settings.session_cookie_secure,
-        samesite="lax",
+        samesite=settings.session_cookie_samesite,
     )
     return response
 
@@ -262,7 +262,7 @@ async def github_callback(
         max_age=settings.session_ttl_seconds,
         httponly=True,
         secure=settings.session_cookie_secure,
-        samesite="lax",
+        samesite=settings.session_cookie_samesite,
     )
     # CSRF double-submit token (see app/security.py::verify_csrf_token) —
     # issued alongside the session, same lifetime, but deliberately NOT
@@ -277,7 +277,7 @@ async def github_callback(
         max_age=settings.session_ttl_seconds,
         httponly=False,
         secure=settings.session_cookie_secure,
-        samesite="lax",
+        samesite=settings.session_cookie_samesite,
     )
     return response
 
