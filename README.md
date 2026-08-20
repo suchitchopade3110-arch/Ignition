@@ -47,10 +47,17 @@ Incoming PR
    — decides — deterministically, no vibes — whether a human needs to see this
      │
      ▼
+🩹 Auto-Fix Patch Generator — posts inline `suggestion` comments for the
+   findings that came with a proposed patch (never applied automatically;
+   you click "Apply suggestion" like any other GitHub review suggestion)
+     │
+     ▼
 📝 A clean, structured review comment, waiting on your PR
 ```
 
 No finding reaches you unverified. No decision to escalate is a guess. And if something looks fishy, the system is allowed to double-check itself — but only so many times, because an AI stuck in a loop with your API budget is nobody's idea of a good time.
+
+The Auto-Fix step only runs on the path that finalizes a review — it's skipped entirely when the Critic pauses for human approval or when Agent 1's deterministic gate rejects the PR outright. When two findings from different agents both propose a patch touching the same file and line, it doesn't post both (that would produce a broken diff): it deterministically keeps the higher-severity one and drops the rest, logging what got dropped.
 
 ## What makes this different (and why it matters)
 
@@ -110,7 +117,7 @@ cookie back as an `X-CSRF-Token` header on those requests.
 
 ## What v1 deliberately doesn't do
 
-- **No autopilot merges.** Anything critical stops and waits for a human. Always.
+- **No autopilot merges.** Anything critical stops and waits for a human. Always. The Auto-Fix step (see above) only ever posts a suggested patch as a review comment for you to accept or ignore — it never commits, pushes, or merges anything itself.
 - **TypeScript/JavaScript only, for now.** Depth over breadth, first.
 - **No IDE plugin.** This lives on your webhook, not your keystrokes — that's a different product for a different day.
 
