@@ -100,10 +100,21 @@ Dependency scanning runs as its own CI job: `pip-audit` against `requirements.tx
 
 ## Deploying to production
 
+Want to deploy on Render specifically? `render.yaml` at the repo root is a
+ready-to-sync Blueprint, and `docs/DEPLOY_RENDER.md` walks through the whole
+first deploy — provisioning the GitHub App/OAuth App/Supabase project,
+filling in secrets, and the cross-origin cookie gotcha two separate
+`*.onrender.com` services run into. The rest of this section applies to any
+target.
+
 Set `APP_ENV=production` — at startup this auto-corrects/flags a few
 defaults that are safe for local dev but not for a real deployment
 (forces `SESSION_COOKIE_SECURE=true`, warns if `ALLOWED_ORIGINS` is still
-the localhost default or `GITHUB_WEBHOOK_SECRET` is unset). See
+the localhost default or `GITHUB_WEBHOOK_SECRET` is unset). If the frontend
+and backend are deployed as separate sites (no shared registrable domain —
+e.g. two different `*.onrender.com` subdomains), also set
+`SESSION_COOKIE_SAMESITE=none`, or the browser never attaches the session
+cookie to the frontend's cross-origin requests and login silently loops. See
 `Settings.validate_production_safety` in `app/config.py` and the comments
 in `.env.example` for the full list of what's checked and the new
 rate-limit / cache-size knobs (`RATE_LIMIT_STORAGE_URI`,
