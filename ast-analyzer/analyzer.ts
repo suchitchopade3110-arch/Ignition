@@ -70,7 +70,7 @@ function globsFor(sourceDir: string): string[] {
  * literals, comments, and pattern-definition arrays are structurally
  * invisible to this check, since they're never parsed as call expressions.
  */
-function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[number], relPath: string): string[] {
+export function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[number], relPath: string): string[] {
   const violations: string[] = [];
   const callExpressions = file.getDescendantsOfKind(SyntaxKind.CallExpression);
 
@@ -168,11 +168,18 @@ export function evictLeastRecentlyUsed(cache: Map<string, Project>): void {
   }
 }
 
-export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzerPayload> {
-  const repoKey = args.repoFullName;
-  const sourceDir = await prepareSource(repoKey, args.source);
-  const project = getOrCreateProject(repoKey, sourceDir, args.projectCache);
+interface ExtractedProjectData {
+  changedFiles: string[];
+  symbols: SymbolRef[];
+  dependencyGraph: DependencyEdge[];
+  hardRuleViolations: string[];
+}
 
+// Split out of analyzePullRequest so the symbol/dependency-graph/hard-rule
+// walk can be exercised directly against an in-memory ts-morph Project in
+// tests, without needing a real git clone or zip download through
+// prepareSource — see analyzer.test.ts.
+export function extractProjectData(project: Project, sourceDir: string): ExtractedProjectData {
   const sourceFiles = project.getSourceFiles();
   const changedFiles: string[] = [];
   const symbols: SymbolRef[] = [];
@@ -238,6 +245,16 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
     hardRuleViolations.push(...detectHardRuleViolations(file, relPath));
   }
 
+  return { changedFiles, symbols, dependencyGraph, hardRuleViolations };
+}
+
+export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzerPayload> {
+  const repoKey = args.repoFullName;
+  const sourceDir = await prepareSource(repoKey, args.source);
+  const project = getOrCreateProject(repoKey, sourceDir, args.projectCache);
+
+  const { changedFiles, symbols, dependencyGraph, hardRuleViolations } = extractProjectData(project, sourceDir);
+
   // NEW — package diffing, independent of the AST symbol walk above
   const headRef = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
   const [basePackages, headPackages] = await Promise.all([
@@ -293,7 +310,7 @@ async function getPackageJsonAtRef(
  * installed versions (that's what package-lock.json is for, and parsing
  * that is a separate, heavier task not needed for this check).
  */
-function diffPackages(
+export function diffPackages(
   base: Record<string, string> | null,
   head: Record<string, string> | null
 ): { name: string; version: string }[] {
