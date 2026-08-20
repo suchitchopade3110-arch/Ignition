@@ -18,7 +18,7 @@
 # over another for a same-named, same-version package), and torch needs
 # an explicit `==<version>+cpu` pin here to force it.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.13.0
+torch>=2.13.0+cpu
 
 fastapi>=0.115
 uvicorn[standard]>=0.30
