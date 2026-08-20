@@ -1,4 +1,4 @@
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 # --- Bun runtime + git (repo cloning) + unzip (zip-source extraction) ---
 RUN apt-get update && apt-get install -y curl unzip git && \
