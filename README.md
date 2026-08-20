@@ -84,6 +84,20 @@ The Auto-Fix step only runs on the path that finalizes a review — it's skipped
 | Metrics | Prometheus (`prometheus_client`) at `GET /metrics` — HTTP, webhook, review-lifecycle, and HITL counters |
 | Frontend / dashboard | Next.js, Tailwind, shadcn/ui |
 
+## Testing & CI
+
+Every layer has its own test suite, and CI (`.github/workflows/ci.yml`) runs all of them on every PR and push to `main`:
+
+| Suite | Command | Covers |
+|---|---|---|
+| Backend | `pytest tests/` | The deterministic gate, routing, scoring, auth, CSRF, webhook handling, HITL, reconciliation, metrics — the control-flow logic, all with GitHub/Supabase/Redis/the LLM mocked |
+| Frontend | `cd frontend && npm test` (vitest) | Query-key/cache/retry-policy logic and the dashboard's components — severity/status badges, stats cards, finding cards, the HITL approve/reject flow |
+| AST analyzer | `cd ast-analyzer && bun test` | Symbol extraction, dependency-graph resolution, the hard-rule violation detector (including its documented false-positive cases), package-diffing, and the project-cache LRU eviction |
+
+`lint`/`typecheck` run alongside the frontend suite, and a `docker-build` job builds both Dockerfiles (backend+worker, AST analyzer) on every run — build-only, since nothing here has registry push credentials.
+
+Dependency scanning runs as its own CI job: `pip-audit` against `requirements.txt` is blocking (the backend tree is currently clean), while `npm audit`/`bun audit` are informational for now — both trees carry pre-existing high-severity transitive advisories that need triage before they can gate merges. [Dependabot](./.github/dependabot.yml) opens weekly update PRs across pip, npm, bun, both Dockerfiles, and the GitHub Actions themselves.
+
 ## Deploying to production
 
 Set `APP_ENV=production` — at startup this auto-corrects/flags a few
@@ -160,7 +174,7 @@ uvicorn app.main:app --reload
 ## How it's organized
 
 ```
-ignition_backend/
+Ignition/
 ├── app/
 │   ├── main.py            # FastAPI entrypoint, webhook handling, SSE streaming
 │   ├── graph/              # The LangGraph state machine: nodes, routing, scoring
@@ -168,8 +182,15 @@ ignition_backend/
 │   ├── repositories/       # Data access layer
 │   ├── schemas/            # Pydantic contracts (GitHub payloads, AST payloads)
 │   └── services/           # External integrations (GitHub, AST service, LLM)
+├── tests/                  # Backend unit/integration tests (pytest)
 ├── ast-analyzer/           # Persistent Bun/ts-morph static analysis service
-└── tests/                  # Unit tests for the deterministic control-flow logic
+│   ├── analyzer.ts         # Symbol extraction, dependency graph, hard-rule detection
+│   ├── server.ts           # Elysia HTTP service wrapping the analyzer
+│   └── *.test.ts           # bun test — parsing logic + project-cache eviction
+└── frontend/               # Next.js dashboard (App Router, Tailwind, shadcn/ui)
+    ├── src/app/             # Routed pages: dashboard, reviews, HITL, ledger, repos
+    ├── src/components/      # Reusable UI (badges, cards, layout, auth guard)
+    └── tests/               # vitest — hooks/query-cache logic + components
 ```
 
 The interesting parts — how each agent reasons, what triggers escalation, how verification actually catches a hallucination — live in the code, not in this README. If that's what you're here for, go read `app/graph/`.
