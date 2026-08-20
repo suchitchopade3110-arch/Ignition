@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "ts-morph": "^28.0.0",
-    "dependency-cruiser": "^16.4.0",
+    "dependency-cruiser": "^18.2.0",
     "elysia": "^1.1.0"
   },
   "devDependencies": {
