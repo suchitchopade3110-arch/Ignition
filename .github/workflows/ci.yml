@@ -29,6 +29,19 @@ name: CI
 # was only discoverable at deploy time. Build-only, no push: no registry
 # credentials are configured here (this repo has none), and catching a
 # broken build doesn't require one.
+#
+# The `dependency-audit` job scans every dependency tree for known CVEs —
+# previously nothing did this at all (Dependabot, added alongside this
+# workflow in .github/dependabot.yml, opens update PRs but doesn't gate
+# CI). `pip-audit` against requirements.txt is blocking: the backend tree
+# is clean today, and a hashed/pinned lockfile means a new finding only
+# shows up when something actually changes, so there's no noise to
+# tolerate. `npm audit` and `bun audit` run informational-only
+# (continue-on-error) for now — both frontend and ast-analyzer currently
+# carry pre-existing high-severity advisories in transitive deps (next,
+# postcss, sharp, js-yaml, fast-uri, brace-expansion) that need triage
+# before this can block merges without immediately going red; the job
+# still surfaces them in every run's logs so they can't go unnoticed.
 on:
   pull_request:
   push:
@@ -131,3 +144,37 @@ jobs:
         with:
           context: ./ast-analyzer
           push: false
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit (backend, blocking)
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (frontend, informational)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: bun audit (ast-analyzer, informational)
+        working-directory: ast-analyzer
+        continue-on-error: true
+        run: bun audit

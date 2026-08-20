@@ -1,0 +1,36 @@
+version: 2
+updates:
+  # Backend — requirements.in is the source of truth; requirements.txt is
+  # the pinned/hashed lockfile regenerated from it (see README). Dependabot
+  # opens PRs against requirements.in-style pip manifests same as any
+  # other pip project; the regen step still needs to run by hand/CI on
+  # each bump, same as it does for any manual dependency change today.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "bun"
+    directory: "/ast-analyzer"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/ast-analyzer"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
