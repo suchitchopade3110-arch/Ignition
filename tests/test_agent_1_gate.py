@@ -28,3 +28,18 @@ def test_violation_rejects():
     result = agent_1_gate(_make_state(["banned import: child_process"]), diff_fetcher=lambda s: "")
     assert result["hard_rule_violation"] is True
     assert "banned import" in result["rejection_reason"]
+
+
+def test_banned_pattern_in_added_diff_line_rejects():
+    diff = "+import { exec } from 'child_process';\n+child_process.exec(cmd);\n"
+    result = agent_1_gate(_make_state([]), diff_fetcher=lambda s: diff)
+    assert result["hard_rule_violation"] is True
+    assert "child_process.exec(" in result["rejection_reason"]
+
+
+def test_banned_pattern_in_removed_diff_line_does_not_reject():
+    # A pattern only present on a `-` (removed) line was already in the
+    # codebase before this PR — the PR is removing it, not introducing it.
+    diff = "-child_process.exec(cmd);\n+safeExec(cmd);\n"
+    result = agent_1_gate(_make_state([]), diff_fetcher=lambda s: diff)
+    assert result["hard_rule_violation"] is False

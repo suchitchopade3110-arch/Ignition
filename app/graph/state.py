@@ -25,9 +25,29 @@ class Finding(BaseModel):
     description: str
     severity: Severity
     suggested_patch: str | None = None
+    # Exact-lookup verification hooks (app/graph/verification/symbol_lookup.py).
+    # An agent that flags an issue tied to a specific declared symbol or a
+    # specific cross-file import should populate one of these so the Critic
+    # can confirm the claim against the real AST graph before trusting it.
+    # Neither is required — a security/dependency finding (Agent 2C) has no
+    # AST symbol to point at, and is passed through unverified by design.
+    symbol_ref: str | None = None
+    dependency_edge_ref: tuple[str, str] | None = None  # (from_file, to_file)
+
+
+class ResetFindings(list):
+    """
+    Sentinel subclass of list. When a node returns this as the `findings`
+    update, merge_findings replaces the accumulated list instead of
+    appending to it — used on the hallucination-retry edge (Critic ->
+    Agent 1) so a second pass's findings don't pile up on top of the first
+    pass's, which the additive reducer would otherwise do silently.
+    """
 
 
 def merge_findings(left: list[Finding], right: list[Finding]) -> list[Finding]:
+    if isinstance(right, ResetFindings):
+        return list(right)
     return left + right
 
 
@@ -51,6 +71,12 @@ class ReviewState(BaseModel):
     acs_score: float | None = None
     is_regression: bool = False
     hitl_severity: Severity = "none"
+
+    # Explicit retry signal — overwritten each Critic pass, never
+    # accumulated. Kept separate from acs_score so "no score yet" and
+    # "score is genuinely null" can never be confused (routing.py used to
+    # overload acs_score is None for this, which was a placeholder hack).
+    critic_wants_retry: bool = False
 
     # Bounded retry loop control (Agent 3 -> Agent 1)
     hallucination_retry_count: Annotated[int, operator.add] = 0

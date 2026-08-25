@@ -14,6 +14,17 @@ only using them to inform what to look for.
 Similar past incidents:
 {similar_incidents}
 
+Declared symbols in the changed files (from the AST analyzer):
+{symbols}
+
+A separate verification step checks every finding against the real AST
+graph before it's shown to a human. If a finding is about a specific
+declared function/class/method, set "symbol_ref" to its exact
+`symbol_name` as it appears in the symbols list above — copy it
+verbatim. If the finding isn't about one specific declared symbol
+(e.g. a cross-cutting pattern spanning several unnamed call sites),
+omit "symbol_ref" rather than guessing at one.
+
 When a finding has an unambiguous, mechanical fix (e.g., a renamed
 field, a corrected import path, a type annotation fix), include a
 "suggested_patch" field containing ONLY the corrected line(s) of code

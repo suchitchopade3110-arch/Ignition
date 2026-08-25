@@ -27,9 +27,8 @@ def route_after_critic(state: ReviewState) -> str:
     and runaway API cost. Cap is a config value, not a magic number.
     """
     settings = get_settings()
-    critic_wants_recheck = state.acs_score is None  # placeholder signal; see agent_3_critic.py
 
-    if critic_wants_recheck and state.hallucination_retry_count < settings.hallucination_retry_cap:
+    if state.critic_wants_retry and state.hallucination_retry_count < settings.hallucination_retry_cap:
         return "retry_context_fetch"
 
     return "route_hitl"
