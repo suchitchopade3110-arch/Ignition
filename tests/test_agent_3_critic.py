@@ -94,6 +94,34 @@ class TestVerifyFindings:
         assert verified == [finding]
         assert hallucinated_count == 0
 
+    def test_architecture_finding_with_no_ref_at_all_is_dropped(self):
+        # The gap this closes: verification used to be opt-in from the
+        # model's side — a vague architecture finding that never made a
+        # checkable claim sailed through as "unverified by design" instead
+        # of being held to the same bar as a specific-but-wrong one.
+        ast_payload = _ast_payload()
+        finding = Finding(
+            agent="agent_2a_struct", file_path="a.ts", description="something seems off",
+            severity="medium",
+        )
+        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        assert verified == []
+        assert hallucinated_count == 1
+
+    def test_non_architecture_finding_with_no_ref_still_passes_through(self):
+        # Mandatory verification is scoped to Agent 2A only — Agent 2B
+        # (logic/chaos) can legitimately flag a cross-cutting issue that
+        # doesn't reduce to one declared symbol, and Agent 2C has no AST
+        # claim to make at all.
+        ast_payload = _ast_payload()
+        finding = Finding(
+            agent="agent_2b_chaos", file_path="a.ts", description="possible N+1 pattern",
+            severity="medium",
+        )
+        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        assert verified == [finding]
+        assert hallucinated_count == 0
+
     def test_mixed_batch_drops_only_the_hallucinated_one(self):
         ast_payload = _ast_payload(
             symbols=[SymbolRef(file_path="a.ts", symbol_name="real", kind="function", line=1)]
@@ -133,9 +161,14 @@ class TestAgentThreeCriticNode:
         )
         # One architecture finding (counts toward ACS) + one security
         # finding (must NOT count toward ACS, since it isn't a claim about
-        # dependency-graph edges).
+        # dependency-graph edges). The architecture finding needs a real,
+        # verifiable dependency_edge_ref now that verification is
+        # mandatory for agent_2a_struct.
         findings = [
-            Finding(agent="agent_2a_struct", file_path="a", description="bad edge", severity="medium"),
+            Finding(
+                agent="agent_2a_struct", file_path="a", description="bad edge", severity="medium",
+                dependency_edge_ref=("a", "b"),
+            ),
             Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
         ]
         state = _state(findings, ast_payload)
@@ -181,9 +214,35 @@ class TestAgentThreeCriticNode:
         ast_payload = _ast_payload(
             dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])]
         )
-        findings = [Finding(agent="agent_2a_struct", file_path="a", description="bad", severity="low")]
+        findings = [
+            Finding(
+                agent="agent_2a_struct", file_path="a", description="bad", severity="low",
+                dependency_edge_ref=("a", "b"),
+            )
+        ]
         state = _state(findings, ast_payload)
         with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
             result = await agent_3_critic(state)
         assert result["is_regression"] is True
         assert result["hitl_severity"] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_regression_tolerance_absorbs_a_trivial_drop(self, monkeypatch):
+        # A tiny drop against the baseline (0.5 points, under the default
+        # 1.0 tolerance) shouldn't page a human — that's exactly the noise
+        # regression_tolerance exists to absorb.
+        self._patch_common(monkeypatch, baseline_acs=100.0)
+        ast_payload = _ast_payload(
+            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])] * 200
+        )
+        findings = [
+            Finding(
+                agent="agent_2a_struct", file_path="a", description="minor", severity="low",
+                dependency_edge_ref=("a", "b"),
+            )
+        ]
+        state = _state(findings, ast_payload)  # (200-1)/200*100 = 99.5, a 0.5-point drop
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        assert result["acs_score"] == 99.5
+        assert result["is_regression"] is False

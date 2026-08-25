@@ -119,6 +119,14 @@ class Settings(BaseModel):
     # the LLM with no registry data behind it at all.
     slopsquat_fresh_package_days: int = 7
 
+    # ACS is a single dependency-edge-count ratio, sensitive to a PR that
+    # happens to touch one extra edge even with no real quality change.
+    # A small non-zero tolerance means "dropped below baseline" requires a
+    # drop that actually means something, not any strictly-less-than
+    # comparison against one stored float. 0.0 recovers the old strict
+    # behavior if a repo wants zero tolerance.
+    regression_tolerance: float = 1.0
+
     # Rate limiting (slowapi/limits). storage_uri defaults to in-process
     # memory:// — see the comment on Limiter construction in app/main.py
     # for why that's the right default until this runs multi-instance.
@@ -158,6 +166,7 @@ class Settings(BaseModel):
             hallucination_retry_cap=int(kwargs.get("hallucination_retry_cap", os.getenv("HALLUCINATION_RETRY_CAP", "3"))),
             review_latency_budget_seconds=int(kwargs.get("review_latency_budget_seconds", os.getenv("REVIEW_LATENCY_BUDGET_SECONDS", "60"))),
             slopsquat_fresh_package_days=int(kwargs.get("slopsquat_fresh_package_days", os.getenv("SLOPSQUAT_FRESH_PACKAGE_DAYS", "7"))),
+            regression_tolerance=float(kwargs.get("regression_tolerance", os.getenv("REGRESSION_TOLERANCE", "1.0"))),
             rate_limit_storage_uri=kwargs.get("rate_limit_storage_uri", os.getenv("RATE_LIMIT_STORAGE_URI", "memory://")),
             default_rate_limit=kwargs.get("default_rate_limit", os.getenv("DEFAULT_RATE_LIMIT", "300/minute")),
             webhook_rate_limit=kwargs.get("webhook_rate_limit", os.getenv("WEBHOOK_RATE_LIMIT", "120/minute")),
