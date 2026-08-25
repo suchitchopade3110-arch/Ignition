@@ -38,17 +38,35 @@ logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_3_critic.md"
 
+# Agents whose findings are claims about the repo's AST graph, and so must
+# be able to name a checkable ref (symbol_ref or dependency_edge_ref) to be
+# trusted at all — an architecture finding that names nothing checkable is
+# treated the same as one that names something false: dropped as a
+# hallucination, not passed through "unverified by design". That escape
+# hatch is reserved for agents whose findings were never AST claims to
+# begin with (Agent 2C's security/supply-chain findings, listed below).
+MANDATORY_VERIFICATION_AGENTS = frozenset({"agent_2a_struct"})
+
+
+class UnverifiableFindingError(Exception):
+    """Raised when a mandatory-verification agent's finding names no checkable ref at all."""
+
 
 def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
     """
     Exact AST/symbol verification of every finding before it's trusted.
 
-    Only a finding that actually claims something checkable against the
-    AST graph gets checked: `symbol_ref` (a specific declared symbol) or
-    `dependency_edge_ref` (a specific cross-file import). A finding with
-    neither — e.g. Agent 2C's security/supply-chain findings, which aren't
-    claims about this repo's AST at all — passes through unverified by
-    design; there's nothing in the AST graph to check it against.
+    A finding that claims something checkable against the AST graph is
+    checked against it: `symbol_ref` (a specific declared symbol) or
+    `dependency_edge_ref` (a specific cross-file import). For
+    MANDATORY_VERIFICATION_AGENTS, naming neither is ALSO treated as a
+    hallucination — "verification is opt-in from the model's side" was a
+    real gap: a vague architecture finding that never made a checkable
+    claim used to sail through as "unverified by design" instead of being
+    held to the same bar as a specific-but-wrong one. Other agents (2C's
+    security/supply-chain findings) aren't claims about this repo's AST at
+    all, so they keep passing through unverified — there's nothing in the
+    AST graph to check them against, mandatory or not.
 
     Returns (verified findings, count of hallucinated/dropped findings).
     """
@@ -57,13 +75,22 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
 
     for finding in state.findings:
         try:
+            if not finding.symbol_ref and not finding.dependency_edge_ref:
+                if finding.agent in MANDATORY_VERIFICATION_AGENTS:
+                    raise UnverifiableFindingError(
+                        f"{finding.agent} finding for {finding.file_path} names no "
+                        f"symbol_ref/dependency_edge_ref — unverifiable, treated as a hallucination."
+                    )
+                verified.append(finding)
+                continue
+
             if finding.symbol_ref:
                 verify_symbol_exists(state.ast_payload, finding.file_path, finding.symbol_ref)
             if finding.dependency_edge_ref:
                 from_file, to_file = finding.dependency_edge_ref
                 verify_dependency_edge_or_raise(state.ast_payload, from_file, to_file)
             verified.append(finding)
-        except (SymbolLookupError, DependencyEdgeLookupError):
+        except (SymbolLookupError, DependencyEdgeLookupError, UnverifiableFindingError):
             hallucinated_count += 1
 
     return verified, hallucinated_count
@@ -152,7 +179,9 @@ async def agent_3_critic(state: ReviewState) -> dict:
     ledger = LedgerRepository()
     baseline = ledger.get_baseline(state.repo_full_name)
     baseline_acs = baseline["acs_score"] if baseline else None
-    regression = is_rule_regression(acs_score, baseline_acs)
+    regression = is_rule_regression(
+        acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
+    )
 
     hitl_severity = _decide_hitl_severity(verified_findings)
     if regression:

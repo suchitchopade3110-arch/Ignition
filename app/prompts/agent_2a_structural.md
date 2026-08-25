@@ -26,7 +26,10 @@ calls or broader refactoring, omit suggested_patch entirely rather
 than guessing.
 
 A separate verification step checks every finding against the real AST
-graph before it's shown to a human, so ground your findings in it
+graph before it's shown to a human — and for this agent specifically,
+that check is MANDATORY: every finding you output must set at least one
+of "symbol_ref" or "dependency_edge_ref", or it will be dropped as
+unverifiable, same as a wrong one would be. Ground each finding
 precisely:
 - If a finding is about a specific declared function/class/interface/
   type/variable, set "symbol_ref" to its exact `symbol_name` as it
@@ -34,9 +37,10 @@ precisely:
 - If a finding is about a specific cross-file import/dependency (e.g. a
   disallowed layer crossing), set "dependency_edge_ref" to the exact
   `[from_file, to_file]` pair as it appears in the dependency graph above.
-- If neither applies, omit both fields rather than guessing at a value —
-  an unverifiable "symbol_ref"/"dependency_edge_ref" gets your finding
-  dropped as a hallucination, not passed through.
+- If a real issue doesn't reduce to one specific symbol or import edge
+  from the lists above (e.g. a cross-cutting concern spanning several
+  files), don't force a fake ref onto it — leave it out of this pass
+  rather than guessing at a value that would only get it dropped anyway.
 
 Output findings as a JSON object with a single key "findings" 
 containing a list of objects matching the Finding schema. If there 

@@ -7,7 +7,14 @@ Phase 1.5: deterministic npm publish-recency lookup (no LLM)
 Phase 2:   semantic slopsquat/typosquat heuristics (LLM), grounded in the
            real publish-recency data fetched in phase 1.5 rather than
            asked to guess metadata it was never given
+
+All three network calls for one package run sequentially (OSV depends on
+nothing else, but phase 2's prompt is grounded in phase 1.5's result, so
+that ordering is real), but different PACKAGES are independent of each
+other and run concurrently via asyncio.gather — a lockfile bump touching
+N packages is N packages in parallel, not N*3 calls in one serial queue.
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +31,17 @@ PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_2c_securi
 
 OSV_API_URL = "https://api.osv.dev/v1/query"
 NPM_REGISTRY_URL = "https://registry.npmjs.org"
+
+# Process-local, unbounded for the lifetime of the process — a given
+# package@version's npm publish date is an immutable historical fact, so
+# unlike a vuln-database result it never goes stale and is always safe to
+# reuse across reviews/repos. Caches the raw publish TIMESTAMP, not a
+# computed age-in-days, so a cache hit is re-diffed against "now" each
+# time rather than freezing the age at whatever it was on the first
+# lookup. Only successful lookups are cached (see _fetch_publish_age_days)
+# so a transient registry failure doesn't get permanently remembered as
+# "unknown".
+_publish_age_cache: dict[tuple[str, str], datetime] = {}
 
 
 async def _phase1_deterministic_registry_check(
@@ -54,7 +72,17 @@ async def _fetch_publish_age_days(
     published. Returns None (not zero) when the registry doesn't have an
     answer — a missing package/version means "unknown", not "just
     published"; those must never be treated the same by the caller.
+
+    Cached by (package_name, version) — see _publish_age_cache's docstring
+    for why that's safe. The cached value is a fixed publish timestamp
+    re-diffed against "now" on every hit, so a cache hit from an hour ago
+    doesn't silently under-report the age.
     """
+    cache_key = (package_name, version)
+    cached_published_at = _publish_age_cache.get(cache_key)
+    if cached_published_at is not None:
+        return (datetime.now(timezone.utc) - cached_published_at).total_seconds() / 86400
+
     try:
         response = await client.get(f"{NPM_REGISTRY_URL}/{package_name}")
         if response.status_code != 200:
@@ -63,8 +91,8 @@ async def _fetch_publish_age_days(
         if not published_at:
             return None
         published_dt = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-        age = datetime.now(timezone.utc) - published_dt
-        return age.total_seconds() / 86400
+        _publish_age_cache[cache_key] = published_dt
+        return (datetime.now(timezone.utc) - published_dt).total_seconds() / 86400
     except Exception:
         logger.exception("Failed to fetch npm publish date for %s@%s", package_name, version)
         return None
@@ -93,8 +121,37 @@ async def _phase2_semantic_slopsquat_check(
         return []
 
 
+async def _process_package(
+    client: httpx.AsyncClient, settings, name: str, version: str
+) -> list[Finding]:
+    """
+    Everything for one package@version — phase 1 (OSV), phase 1.5 (publish
+    age), phase 2 (LLM slopsquat check). These three stay sequential within
+    a package (phase 2 needs phase 1.5's result to ground its prompt), but
+    the caller runs this whole function concurrently across packages.
+    """
+    findings = await _phase1_deterministic_registry_check(client, name, version)
+
+    publish_age_days = await _fetch_publish_age_days(client, name, version)
+    if publish_age_days is not None and publish_age_days < settings.slopsquat_fresh_package_days:
+        findings.append(
+            Finding(
+                agent="agent_2c_security",
+                file_path="package.json",
+                description=(
+                    f"{name}@{version} was published to npm {publish_age_days:.1f} days ago "
+                    f"(threshold: {settings.slopsquat_fresh_package_days}d) — freshly-published "
+                    f"dependencies are a common slopsquat/supply-chain vector"
+                ),
+                severity="medium",
+            )
+        )
+
+    findings += await _phase2_semantic_slopsquat_check(name, publish_age_days)
+    return findings
+
+
 async def agent_2c_security(state: ReviewState) -> dict:
-    findings: list[Finding] = []
     settings = get_settings()
 
     # Dedupe (name, version) pairs — a lockfile bump can list the same
@@ -105,24 +162,14 @@ async def agent_2c_security(state: ReviewState) -> dict:
     })
 
     async with httpx.AsyncClient() as client:
-        for name, version in changed_packages:
-            findings += await _phase1_deterministic_registry_check(client, name, version)
+        # Packages are independent of each other — run them concurrently
+        # rather than one at a time. httpx.AsyncClient is documented safe
+        # for concurrent use from many in-flight coroutines (same pattern
+        # as app/services/llm_client.py's shared AsyncGroq client).
+        per_package_findings = await asyncio.gather(*(
+            _process_package(client, settings, name, version)
+            for name, version in changed_packages
+        ))
 
-            publish_age_days = await _fetch_publish_age_days(client, name, version)
-            if publish_age_days is not None and publish_age_days < settings.slopsquat_fresh_package_days:
-                findings.append(
-                    Finding(
-                        agent="agent_2c_security",
-                        file_path="package.json",
-                        description=(
-                            f"{name}@{version} was published to npm {publish_age_days:.1f} days ago "
-                            f"(threshold: {settings.slopsquat_fresh_package_days}d) — freshly-published "
-                            f"dependencies are a common slopsquat/supply-chain vector"
-                        ),
-                        severity="medium",
-                    )
-                )
-
-            findings += await _phase2_semantic_slopsquat_check(name, publish_age_days)
-
+    findings = [f for package_findings in per_package_findings for f in package_findings]
     return {"findings": findings}
