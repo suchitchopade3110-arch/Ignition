@@ -21,12 +21,18 @@ that were already filtered out earlier in this same function.
 import logging
 from pathlib import Path
 
-from app.graph.state import ReviewState, Finding
-from app.graph.verification.symbol_lookup import verify_symbol_exists, SymbolLookupError
+from app.graph.state import ReviewState, Finding, ResetFindings
+from app.graph.verification.symbol_lookup import (
+    verify_symbol_exists,
+    verify_dependency_edge_or_raise,
+    SymbolLookupError,
+    DependencyEdgeLookupError,
+)
 from app.graph.scoring import compute_acs, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
 from app.services.llm_client import get_llm_client
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +42,14 @@ PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_3_critic.
 def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
     """
     Exact AST/symbol verification of every finding before it's trusted.
+
+    Only a finding that actually claims something checkable against the
+    AST graph gets checked: `symbol_ref` (a specific declared symbol) or
+    `dependency_edge_ref` (a specific cross-file import). A finding with
+    neither — e.g. Agent 2C's security/supply-chain findings, which aren't
+    claims about this repo's AST at all — passes through unverified by
+    design; there's nothing in the AST graph to check it against.
+
     Returns (verified findings, count of hallucinated/dropped findings).
     """
     verified: list[Finding] = []
@@ -43,10 +57,13 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
 
     for finding in state.findings:
         try:
-            if finding.description.startswith("symbol:"):
-                verify_symbol_exists(state.ast_payload, finding.file_path, finding.description)
+            if finding.symbol_ref:
+                verify_symbol_exists(state.ast_payload, finding.file_path, finding.symbol_ref)
+            if finding.dependency_edge_ref:
+                from_file, to_file = finding.dependency_edge_ref
+                verify_dependency_edge_or_raise(state.ast_payload, from_file, to_file)
             verified.append(finding)
-        except SymbolLookupError:
+        except (SymbolLookupError, DependencyEdgeLookupError):
             hallucinated_count += 1
 
     return verified, hallucinated_count
@@ -122,8 +139,14 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
 async def agent_3_critic(state: ReviewState) -> dict:
     verified_findings, hallucinated_count = _verify_findings(state)
 
+    # ACS is denominated in dependency-graph edges, so only architecture
+    # findings (Agent 2A — the only agent whose findings are claims about
+    # those edges) count toward its numerator. Logic (2B) and security (2C)
+    # findings are real, but they're not violations of *this* graph, and
+    # mixing them in would score a PR against a denominator it has nothing
+    # to do with (see scoring.py's docstring).
     total_deps = len(state.ast_payload.dependency_graph)
-    total_violations = len(verified_findings)
+    total_violations = sum(1 for f in verified_findings if f.agent == "agent_2a_struct")
     acs_score = compute_acs(total_deps, total_violations)
 
     ledger = LedgerRepository()
@@ -132,10 +155,10 @@ async def agent_3_critic(state: ReviewState) -> dict:
     regression = is_rule_regression(acs_score, baseline_acs)
 
     hitl_severity = _decide_hitl_severity(verified_findings)
-    if regression and hitl_severity not in ("critical", "high"):
-        hitl_severity = "high"  # regressions are never silently downgraded
+    if regression:
+        hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 
-    should_retry = hallucinated_count > 0 and state.hallucination_retry_count == 0
+    should_retry = hallucinated_count > 0 and state.hallucination_retry_count < get_settings().hallucination_retry_cap
 
     prompt_template = PROMPT_PATH.read_text()
     narrative = await _generate_narrative(prompt_template, verified_findings)
@@ -146,14 +169,26 @@ async def agent_3_critic(state: ReviewState) -> dict:
     if not should_retry:
         await _record_incidents(state.repo_full_name, verified_findings)
 
-    return {
+    result = {
         "verified_findings": verified_findings,
-        "acs_score": None if should_retry else acs_score,
+        "acs_score": acs_score,
         "is_regression": regression,
         "hitl_severity": hitl_severity,
+        "critic_wants_retry": should_retry,
         "hallucination_retry_count": 1 if should_retry else 0,
         "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression, narrative),
     }
+    if should_retry:
+        # ResetFindings, not `[]`: the retry edge (route_after_critic ->
+        # agent_1_gate) re-runs the fan-out, and `findings` uses an
+        # additive reducer everywhere else — an empty list would just
+        # append zero items, leaving this pass's (partly hallucinated)
+        # findings in place for the retry pass to pile on top of. This
+        # sentinel tells the reducer to replace instead. Omitted entirely
+        # on the non-retry path — returning state.findings here would
+        # double it through that same additive reducer.
+        result["findings"] = ResetFindings()
+    return result
 
 
 def _render_markdown(

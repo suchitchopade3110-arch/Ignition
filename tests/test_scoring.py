@@ -25,3 +25,9 @@ def test_no_regression_when_no_baseline_exists():
 
 def test_no_regression_when_score_improves():
     assert is_rule_regression(current_acs=95.0, baseline_acs=90.0) is False
+
+
+def test_acs_clamped_at_zero_when_violations_exceed_dependencies():
+    # A PR can carry more architecture violations than dependency edges in
+    # the raw formula's arithmetic; the score must not go negative.
+    assert compute_acs(total_dependencies=1, total_violations=5) == 0.0

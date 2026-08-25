@@ -34,6 +34,17 @@ def parse_findings_json(raw: str, agent_name: str) -> list[Finding]:
             line = item.get("line") or item.get("line_number")
             if line is not None:
                 line = int(line)
+
+            dependency_edge_ref = item.get("dependency_edge_ref")
+            if dependency_edge_ref is not None:
+                # Must be an exact (from_file, to_file) pair to be usable by
+                # the Critic's exact-lookup check — anything else is a
+                # malformed field, not a claim worth carrying forward.
+                if not (isinstance(dependency_edge_ref, (list, tuple)) and len(dependency_edge_ref) == 2):
+                    dependency_edge_ref = None
+                else:
+                    dependency_edge_ref = tuple(dependency_edge_ref)
+
             findings.append(
                 Finding(
                     agent=agent_name,
@@ -42,6 +53,8 @@ def parse_findings_json(raw: str, agent_name: str) -> list[Finding]:
                     description=item["description"],
                     severity=item.get("severity", "low"),
                     suggested_patch=item.get("suggested_patch"),
+                    symbol_ref=item.get("symbol_ref"),
+                    dependency_edge_ref=dependency_edge_ref,
                 )
             )
         except (KeyError, TypeError, ValueError):

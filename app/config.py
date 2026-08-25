@@ -112,6 +112,13 @@ class Settings(BaseModel):
     hallucination_retry_cap: int = 3
     review_latency_budget_seconds: int = 60
 
+    # Agent 2C: a package whose current version was published to npm more
+    # recently than this many days ago is flagged deterministically as
+    # "freshly published" (see agent_2c_security.py) — this is what
+    # actually backs the "4 hours old" style claim; it used to be asked of
+    # the LLM with no registry data behind it at all.
+    slopsquat_fresh_package_days: int = 7
+
     # Rate limiting (slowapi/limits). storage_uri defaults to in-process
     # memory:// — see the comment on Limiter construction in app/main.py
     # for why that's the right default until this runs multi-instance.
@@ -150,6 +157,7 @@ class Settings(BaseModel):
             allowed_origins=kwargs.get("allowed_origins", os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")),
             hallucination_retry_cap=int(kwargs.get("hallucination_retry_cap", os.getenv("HALLUCINATION_RETRY_CAP", "3"))),
             review_latency_budget_seconds=int(kwargs.get("review_latency_budget_seconds", os.getenv("REVIEW_LATENCY_BUDGET_SECONDS", "60"))),
+            slopsquat_fresh_package_days=int(kwargs.get("slopsquat_fresh_package_days", os.getenv("SLOPSQUAT_FRESH_PACKAGE_DAYS", "7"))),
             rate_limit_storage_uri=kwargs.get("rate_limit_storage_uri", os.getenv("RATE_LIMIT_STORAGE_URI", "memory://")),
             default_rate_limit=kwargs.get("default_rate_limit", os.getenv("DEFAULT_RATE_LIMIT", "300/minute")),
             webhook_rate_limit=kwargs.get("webhook_rate_limit", os.getenv("WEBHOOK_RATE_LIMIT", "120/minute")),

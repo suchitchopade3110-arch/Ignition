@@ -22,8 +22,10 @@ async def agent_2a_struct(state: ReviewState) -> dict:
     llm = get_llm_client()
 
     dependency_graph_json = [edge.model_dump() for edge in state.ast_payload.dependency_graph]
+    symbols_json = [symbol.model_dump() for symbol in state.ast_payload.symbols]
     prompt = prompt_template.format(
         dependency_graph=dependency_graph_json,
+        symbols=symbols_json,
         diff=state.diff_text,
     )
 

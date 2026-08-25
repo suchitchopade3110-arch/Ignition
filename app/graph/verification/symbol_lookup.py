@@ -14,6 +14,10 @@ class SymbolLookupError(Exception):
     """Raised when a finding references a symbol that doesn't exist in the AST graph."""
 
 
+class DependencyEdgeLookupError(Exception):
+    """Raised when a finding references a cross-file import that doesn't exist in the dependency graph."""
+
+
 def verify_symbol_exists(ast_payload: ASTAnalyzerPayload, file_path: str, symbol_name: str) -> SymbolRef:
     """
     Exact-match lookup: does this symbol actually exist at this file path
@@ -36,3 +40,17 @@ def verify_dependency_edge_exists(ast_payload: ASTAnalyzerPayload, from_file: st
         edge.from_file == from_file and edge.to_file == to_file
         for edge in ast_payload.dependency_graph
     )
+
+
+def verify_dependency_edge_or_raise(ast_payload: ASTAnalyzerPayload, from_file: str, to_file: str) -> None:
+    """
+    Same check as verify_dependency_edge_exists, but raises — the shape
+    the Critic's verification loop wants (matching verify_symbol_exists),
+    since it treats "not found" as a hallucination signal, not a bool to
+    branch on inline.
+    """
+    if not verify_dependency_edge_exists(ast_payload, from_file, to_file):
+        raise DependencyEdgeLookupError(
+            f"Dependency edge '{from_file}' -> '{to_file}' not found in the dependency "
+            f"graph — finding is unverified, treat as a potential hallucination."
+        )

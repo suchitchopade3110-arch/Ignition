@@ -20,6 +20,18 @@ def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
             "Failed to fetch PR diff; semantic agents will run without code context"
         )
 
+    # Deterministic banned-pattern scan of the actual diff text — added
+    # lines only, so this can't reject a PR for a pattern that was already
+    # present before the change. Was defined but never applied; the AST
+    # analyzer's own hard_rule_violations (checked above) cover its own
+    # findings, but this is the gate's one direct check against the diff.
+    added_lines = "\n".join(
+        line for line in diff_text.splitlines() if line.startswith("+") and not line.startswith("+++")
+    )
+    for pattern in BANNED_IMPORT_PATTERNS:
+        if pattern in added_lines:
+            violations.append(f"banned pattern introduced: {pattern}")
+
     if violations:
         return {
             "hard_rule_violation": True,

@@ -38,8 +38,10 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
         logger.exception("Failed to retrieve similar incidents; proceeding without RAG context")
         similar_incidents = []
 
+    symbols_json = [symbol.model_dump() for symbol in state.ast_payload.symbols]
     prompt = prompt_template.format(
         similar_incidents=json.dumps(similar_incidents),
+        symbols=symbols_json,
         diff=state.diff_text,
     )
 
