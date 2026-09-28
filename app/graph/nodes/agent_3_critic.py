@@ -28,6 +28,7 @@ from app.graph.verification.symbol_lookup import (
     SymbolLookupError,
     DependencyEdgeLookupError,
 )
+from app.graph.verification.boundary_spec import is_boundary_violation, load_default_boundary_spec
 from app.graph.scoring import compute_acs, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
@@ -68,8 +69,19 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
     all, so they keep passing through unverified — there's nothing in the
     AST graph to check them against, mandatory or not.
 
+    Every finding that survives also gets a `verification_tier`. Passing
+    hallucination verification only proves a finding's symbol/edge is real
+    — it does NOT prove the finding's judgment ("this is a violation") is
+    correct. Only a dependency_edge_ref that both verifies AND matches a
+    disallowed boundary-spec rule (app/graph/verification/boundary_spec.py)
+    is tagged `fact_checked`; everything else that survives (all 2B/2C
+    findings, symbol_ref findings, and edge findings that are real but don't
+    match any spec rule) is `contextual` — real, but not independently
+    proven to be a genuine defect.
+
     Returns (verified findings, count of hallucinated/dropped findings).
     """
+    boundary_spec = load_default_boundary_spec()
     verified: list[Finding] = []
     hallucinated_count = 0
 
@@ -81,6 +93,7 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
                         f"{finding.agent} finding for {finding.file_path} names no "
                         f"symbol_ref/dependency_edge_ref — unverifiable, treated as a hallucination."
                     )
+                finding.verification_tier = "contextual"
                 verified.append(finding)
                 continue
 
@@ -89,6 +102,11 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
             if finding.dependency_edge_ref:
                 from_file, to_file = finding.dependency_edge_ref
                 verify_dependency_edge_or_raise(state.ast_payload, from_file, to_file)
+                finding.verification_tier = (
+                    "fact_checked" if is_boundary_violation(boundary_spec, from_file, to_file) else "contextual"
+                )
+            else:
+                finding.verification_tier = "contextual"
             verified.append(finding)
         except (SymbolLookupError, DependencyEdgeLookupError, UnverifiableFindingError):
             hallucinated_count += 1
@@ -137,6 +155,15 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
     here must never fail the whole Critic node, since this is a
     forward-looking enrichment step, not part of the current review's
     correctness.
+
+    Every verified finding is recorded — RAG is semantic *context* for 2B,
+    not a fact store (see rag/vector_store.py's docstring), so a contextual
+    finding is still useful recall even though it isn't hard-rule-proven.
+    But it's tagged with its real tier and a distinct `source` so the
+    incident corpus never lets a `contextual` (LLM-judgment) finding pass
+    itself off as independently verified: only `fact_checked` findings are
+    recorded under `source: "verified"`; everything else gets
+    `source: "unverified_llm"`.
     """
     if not verified_findings:
         return
@@ -145,6 +172,7 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
     for finding in verified_findings:
         try:
             content = f"[{finding.agent}] {finding.file_path}: {finding.description}"
+            source = "verified" if finding.verification_tier == "fact_checked" else "unverified_llm"
             await vector_store.record_incident(
                 repo_full_name=repo_full_name,
                 content=content,
@@ -153,6 +181,8 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
                     "file_path": finding.file_path,
                     "line": finding.line,
                     "agent": finding.agent,
+                    "verification_tier": finding.verification_tier,
+                    "source": source,
                 },
             )
         except Exception:

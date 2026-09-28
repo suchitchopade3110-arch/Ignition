@@ -17,6 +17,16 @@ from app.schemas.github import PullRequestWebhook
 
 Severity = Literal["none", "low", "medium", "high", "critical"]
 
+# "fact_checked": the finding's claim was checked against a hard rule (right
+# now: a boundary-spec layer violation, app/graph/verification/boundary_spec.py)
+# and proven to actually violate it — not merely proven to reference
+# something real. "contextual": the finding survived hallucination
+# verification (its symbol/edge exists, or it made no checkable AST claim by
+# design) but its "this is a problem" judgment is still the LLM's, unproven
+# against any hard rule. Set by agent_3_critic._verify_findings; see that
+# module's docstring for exactly which findings land in which tier.
+VerificationTier = Literal["fact_checked", "contextual"]
+
 
 class Finding(BaseModel):
     agent: str
@@ -33,6 +43,10 @@ class Finding(BaseModel):
     # AST symbol to point at, and is passed through unverified by design.
     symbol_ref: str | None = None
     dependency_edge_ref: tuple[str, str] | None = None  # (from_file, to_file)
+    # Defaults to the weaker tier — only agent_3_critic._verify_findings is
+    # allowed to upgrade a finding to "fact_checked", and only after proving
+    # it against the boundary spec.
+    verification_tier: VerificationTier = "contextual"
 
 
 class ResetFindings(list):

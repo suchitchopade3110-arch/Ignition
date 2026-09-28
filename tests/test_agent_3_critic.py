@@ -137,6 +137,63 @@ class TestVerifyFindings:
         assert hallucinated_count == 1
 
 
+class TestVerificationTier:
+    """
+    A finding surviving hallucination verification (its symbol/edge is real)
+    is a different, weaker claim than a finding proven to violate a hard
+    rule — only the latter should ever be shown as fact_checked.
+    """
+
+    def test_2a_edge_matching_a_boundary_rule_is_fact_checked(self):
+        ast_payload = _ast_payload(
+            dependency_graph=[
+                DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=[]),
+            ]
+        )
+        finding = Finding(
+            agent="agent_2a_struct", file_path="app/repositories/ledger.py", description="layering inversion",
+            severity="high", dependency_edge_ref=("app/repositories/ledger.py", "app/main.py"),
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].verification_tier == "fact_checked"
+
+    def test_2a_edge_with_no_boundary_rule_is_contextual(self):
+        # The edge is real (verification passes), but nothing in the
+        # boundary spec says this direction is a violation — proving an
+        # edge exists is not the same as proving it's a problem.
+        ast_payload = _ast_payload(
+            dependency_graph=[
+                DependencyEdge(from_file="app/graph/state.py", to_file="app/graph/scoring.py", imported_symbols=[]),
+            ]
+        )
+        finding = Finding(
+            agent="agent_2a_struct", file_path="app/graph/state.py", description="tight coupling",
+            severity="low", dependency_edge_ref=("app/graph/state.py", "app/graph/scoring.py"),
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].verification_tier == "contextual"
+
+    def test_2a_symbol_ref_finding_is_contextual_even_when_verified(self):
+        ast_payload = _ast_payload(
+            symbols=[SymbolRef(file_path="a.ts", symbol_name="doThing", kind="function", line=5)]
+        )
+        finding = Finding(
+            agent="agent_2a_struct", file_path="a.ts", description="doThing is unsafe",
+            severity="high", symbol_ref="doThing",
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].verification_tier == "contextual"
+
+    def test_2b_and_2c_findings_are_never_fact_checked(self):
+        ast_payload = _ast_payload()
+        findings = [
+            Finding(agent="agent_2b_chaos", file_path="a.ts", description="N+1 pattern", severity="medium"),
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
+        ]
+        verified, _ = _verify_findings(_state(findings, ast_payload))
+        assert all(f.verification_tier == "contextual" for f in verified)
+
+
 class TestAgentThreeCriticNode:
     """Full-node behavior: ACS unit consistency, retry-loop wiring, HITL on regression."""
 
@@ -225,6 +282,47 @@ class TestAgentThreeCriticNode:
             result = await agent_3_critic(state)
         assert result["is_regression"] is True
         assert result["hitl_severity"] == "critical"
+
+    @pytest.mark.asyncio
+    async def test_incident_store_never_tags_a_contextual_finding_as_verified(self, monkeypatch):
+        record_incident = AsyncMock()
+        monkeypatch.setattr(
+            "app.graph.nodes.agent_3_critic.LedgerRepository",
+            lambda: MagicMock(get_baseline=lambda repo: None),
+        )
+        monkeypatch.setattr(
+            "app.graph.nodes.agent_3_critic.VectorStore",
+            lambda: MagicMock(record_incident=record_incident),
+        )
+        monkeypatch.setattr("pathlib.Path.read_text", lambda self: "{verified_findings}")
+
+        ast_payload = _ast_payload(
+            dependency_graph=[
+                DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=[]),
+            ]
+        )
+        findings = [
+            # fact_checked: a real edge that matches a boundary-spec rule.
+            Finding(
+                agent="agent_2a_struct", file_path="app/repositories/ledger.py", description="layering inversion",
+                severity="high", dependency_edge_ref=("app/repositories/ledger.py", "app/main.py"),
+            ),
+            # contextual: a security finding with no AST claim at all.
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
+        ]
+        state = _state(findings, ast_payload)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            await agent_3_critic(state)
+
+        recorded_metadata = [call.kwargs["metadata"] for call in record_incident.await_args_list]
+        assert len(recorded_metadata) == 2
+        for metadata in recorded_metadata:
+            if metadata["verification_tier"] == "contextual":
+                assert metadata["source"] != "verified"
+                assert metadata["source"] == "unverified_llm"
+            else:
+                assert metadata["verification_tier"] == "fact_checked"
+                assert metadata["source"] == "verified"
 
     @pytest.mark.asyncio
     async def test_regression_tolerance_absorbs_a_trivial_drop(self, monkeypatch):

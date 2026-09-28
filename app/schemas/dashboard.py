@@ -80,6 +80,12 @@ class Finding(CamelModel):
     rule: str
     recommendation: str
     suggested_fix: str | None = None
+    # "fact_checked": proven against a hard rule (boundary-spec violation).
+    # "contextual": survived hallucination verification but the "this is a
+    # problem" judgment is still the LLM's. See app/graph/state.py's
+    # VerificationTier docstring — the dashboard must never show "verified"
+    # for a tier this pipeline hasn't actually proven.
+    verification_tier: Literal["fact_checked", "contextual"] = "contextual"
 
 class AgentProgress(CamelModel):
     id: str

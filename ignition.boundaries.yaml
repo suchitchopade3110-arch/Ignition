@@ -1,0 +1,64 @@
+# Architecture boundary spec for Ignition's deterministic gate
+# (app/graph/nodes/agent_1_gate.py via app/graph/verification/boundary_spec.py).
+#
+# `layers` name a set of glob patterns matched against file paths reported in
+# the AST analyzer's dependency graph (ASTAnalyzerPayload.dependency_graph).
+# `**` matches any number of path segments, `*` matches within one segment.
+#
+# `rules` declare import directions that are hard violations: an edge whose
+# from_file matches `from` and whose to_file matches `to` is a disallowed
+# layer crossing. This is checked with an exact glob match against real
+# dependency-graph edges, no LLM involved — see agent_1_gate.py.
+#
+# A file that doesn't match any layer, or an edge whose direction isn't
+# covered by any rule, is left alone: this spec only flags edges it knows
+# about, it doesn't forbid everything by default.
+
+version: 1
+
+layers:
+  - name: repositories
+    patterns:
+      - "app/repositories/**"
+  - name: services
+    patterns:
+      - "app/services/**"
+  - name: graph
+    patterns:
+      - "app/graph/**"
+  - name: database
+    patterns:
+      - "app/database.py"
+  - name: routes
+    patterns:
+      - "app/main.py"
+      - "app/api/**"
+      - "app/routers/**"
+  - name: ui-components
+    patterns:
+      - "frontend/src/components/**"
+  - name: ui-pages
+    patterns:
+      - "frontend/src/app/**"
+
+rules:
+  # The data layer must never reach up into request handling or business
+  # logic — a repository importing a route/service module is a layering
+  # inversion regardless of what the code inside it does.
+  - from: repositories
+    to: routes
+    disallowed: true
+  - from: repositories
+    to: services
+    disallowed: true
+  - from: database
+    to: routes
+    disallowed: true
+  - from: database
+    to: services
+    disallowed: true
+  # Presentational components rendering markup shouldn't reach directly into
+  # backend orchestration code.
+  - from: ui-components
+    to: graph
+    disallowed: true

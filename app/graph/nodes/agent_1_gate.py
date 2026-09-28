@@ -1,7 +1,28 @@
+import re
+
 from app.graph.state import ReviewState
+from app.graph.verification.boundary_spec import check_boundary_violations, load_default_boundary_spec
 from app.services.github_client import GitHubClient
 
 BANNED_IMPORT_PATTERNS = ["eval(", "child_process.exec("]
+
+# Strips out comments and string-literal contents so the banned-pattern scan
+# below only ever matches real code, not a pattern name mentioned in a
+# comment or a test fixture string. DOTALL so a `/* ... */` block comment
+# spanning multiple added diff lines (each still prefixed with its own `+`)
+# is matched as one token.
+_STRING_OR_COMMENT_RE = re.compile(
+    r"/\*.*?\*/"          # block comment
+    r"|//[^\n]*"          # line comment
+    r'|"(?:[^"\\\n]|\\.)*"'   # double-quoted string
+    r"|'(?:[^'\\\n]|\\.)*'"   # single-quoted string
+    r"|`(?:[^`\\]|\\.)*`",    # template literal
+    re.DOTALL,
+)
+
+
+def _strip_comments_and_strings(code: str) -> str:
+    return _STRING_OR_COMMENT_RE.sub(" ", code)
 
 
 def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
@@ -28,9 +49,21 @@ def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
     added_lines = "\n".join(
         line for line in diff_text.splitlines() if line.startswith("+") and not line.startswith("+++")
     )
+    added_code = _strip_comments_and_strings(added_lines)
     for pattern in BANNED_IMPORT_PATTERNS:
-        if pattern in added_lines:
+        if pattern in added_code:
             violations.append(f"banned pattern introduced: {pattern}")
+
+    # Deterministic boundary-spec check (app/graph/verification/boundary_spec.py):
+    # a dependency edge that crosses a layer boundary the spec declares
+    # disallowed is a hard rule violation, checked by exact glob match
+    # against the real dependency graph, no LLM involved.
+    boundary_spec = load_default_boundary_spec()
+    for violation in check_boundary_violations(state.ast_payload.dependency_graph, boundary_spec):
+        violations.append(
+            f"boundary violation: {violation.from_file} ({violation.from_layer}) -> "
+            f"{violation.to_file} ({violation.to_layer}) is a disallowed layer crossing"
+        )
 
     if violations:
         return {

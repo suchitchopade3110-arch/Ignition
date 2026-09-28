@@ -400,6 +400,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "rule": f.agent.replace("_", " ").title(),
                                 "recommendation": f.description,
                                 "suggestedFix": f.suggested_patch,
+                                "verificationTier": f.verification_tier,
                             })
 
                         regression_alert = {
