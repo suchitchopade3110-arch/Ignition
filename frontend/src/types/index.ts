@@ -55,6 +55,8 @@ export interface ReviewDiff {
   content: string // Contains unified diff format
 }
 
+export type VerificationTier = "fact_checked" | "contextual"
+
 export interface Finding {
   id: string
   agentId: string
@@ -65,6 +67,10 @@ export interface Finding {
   rule: string
   recommendation: string
   suggestedFix?: string
+  // "fact_checked": proven against a hard rule (boundary-spec violation).
+  // "contextual": real (not a hallucination) but the "this is a problem"
+  // judgment is still the LLM's, unproven against any hard rule.
+  verificationTier?: VerificationTier
 }
 
 export interface AgentProgress {

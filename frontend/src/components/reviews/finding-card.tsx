@@ -1,11 +1,44 @@
 "use client"
 
 import { useState } from "react"
-import { Finding } from "@/types"
+import { Finding, VerificationTier } from "@/types"
 import { SeverityBadge } from "@/components/ui/severity-badge"
-import { ChevronDown, ChevronRight, Copy, FileText, Check } from "lucide-react"
+import { ChevronDown, ChevronRight, Copy, FileText, Check, ShieldCheck, HelpCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion"
+
+const VERIFICATION_TIER_CONFIG: Record<VerificationTier, { label: string; styles: string; icon: typeof ShieldCheck }> = {
+  fact_checked: {
+    label: "Fact-checked",
+    styles: "bg-success/10 text-success border-success/20",
+    icon: ShieldCheck,
+  },
+  contextual: {
+    label: "Contextual",
+    styles: "bg-secondary text-muted-foreground border-border",
+    icon: HelpCircle,
+  },
+}
+
+function VerificationTierBadge({ tier }: { tier: VerificationTier }) {
+  const { label, styles, icon: Icon } = VERIFICATION_TIER_CONFIG[tier]
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium border shrink-0",
+        styles
+      )}
+      title={
+        tier === "fact_checked"
+          ? "Proven against a hard rule (e.g. an architecture boundary violation)"
+          : "Not a hallucination, but not independently proven against a hard rule"
+      }
+    >
+      <Icon className="h-3 w-3" />
+      {label}
+    </span>
+  )
+}
 
 export function FindingCard({ finding }: { finding: Finding }) {
   const [expanded, setExpanded] = useState(false)
@@ -53,6 +86,7 @@ export function FindingCard({ finding }: { finding: Finding }) {
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
           <SeverityBadge level={finding.severity} className="shrink-0" />
+          <VerificationTierBadge tier={finding.verificationTier ?? "contextual"} />
           <div className="flex flex-col min-w-0">
             <span className="text-sm font-semibold text-foreground leading-snug">{finding.description}</span>
             <div className="flex items-center gap-2 mt-1.5">

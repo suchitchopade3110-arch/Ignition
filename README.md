@@ -55,7 +55,7 @@ Incoming PR
 📝 A clean, structured review comment, waiting on your PR
 ```
 
-No finding reaches you unverified. No decision to escalate is a guess. And if something looks fishy, the system is allowed to double-check itself — but only so many times, because an AI stuck in a loop with your API budget is nobody's idea of a good time.
+No finding reaches you that couldn't be checked against your actual code — a referenced symbol or import that doesn't exist gets dropped as a hallucination, not shown to you. But "not a hallucination" and "definitely a real problem" aren't the same claim: findings are labeled **Fact-checked** (proven against a hard architecture rule) or **Contextual** (real, but still the model's judgment call) right on the dashboard, so you always know which one you're looking at. No decision to escalate is a guess. And if something looks fishy, the system is allowed to double-check itself — but only so many times, because an AI stuck in a loop with your API budget is nobody's idea of a good time.
 
 The Auto-Fix step only runs on the path that finalizes a review — it's skipped entirely when the Critic pauses for human approval or when Agent 1's deterministic gate rejects the PR outright. When two findings from different agents both propose a patch touching the same file and line, it doesn't post both (that would produce a broken diff): it deterministically keeps the higher-severity one and drops the rest, logging what got dropped.
 
@@ -63,7 +63,7 @@ The Auto-Fix step only runs on the path that finalizes a review — it's skipped
 
 **It doesn't panic and generalize.** Each agent owns one lane — architecture, logic/performance, or security — and stays in it. No context dilution, no superficial "looks fine to me" pass.
 
-**It doesn't just trust itself.** Every finding gets fact-checked against your actual code before it's shown to you. If the AI can't prove it, you never see it.
+**It doesn't just trust itself.** Every finding is checked against your actual code before it's shown to you — a claim that references something that doesn't exist never reaches you. Only findings that violate a declared architecture rule (`ignition.boundaries.yaml`) are labeled **Fact-checked**; everything else is labeled **Contextual** so the dashboard never claims more certainty than the pipeline actually proved.
 
 **It doesn't cost more the longer it's unsure.** Retries are capped. If verification stalls, the system flags it for a human instead of burning through your API budget trying to convince itself.
 
@@ -186,6 +186,8 @@ uvicorn app.main:app --reload
 
 ```
 Ignition/
+├── ignition.boundaries.yaml # Declared layer boundaries — the deterministic gate's
+│                             # source of truth for what counts as a real architecture violation
 ├── app/
 │   ├── main.py            # FastAPI entrypoint, webhook handling, SSE streaming
 │   ├── graph/              # The LangGraph state machine: nodes, routing, scoring

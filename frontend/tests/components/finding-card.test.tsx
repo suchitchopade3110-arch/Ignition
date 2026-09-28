@@ -24,6 +24,23 @@ describe("FindingCard", () => {
     expect(screen.queryByText(baseFinding.rule)).not.toBeInTheDocument()
   })
 
+  it("labels an unset verification tier as Contextual, never as verified", () => {
+    render(<FindingCard finding={baseFinding} />)
+    expect(screen.getByText("Contextual")).toBeInTheDocument()
+    expect(screen.queryByText("Fact-checked")).not.toBeInTheDocument()
+  })
+
+  it("shows the Fact-checked badge for a fact_checked finding", () => {
+    render(<FindingCard finding={{ ...baseFinding, verificationTier: "fact_checked" }} />)
+    expect(screen.getByText("Fact-checked")).toBeInTheDocument()
+    expect(screen.queryByText("Contextual")).not.toBeInTheDocument()
+  })
+
+  it("shows the Contextual badge for a contextual finding", () => {
+    render(<FindingCard finding={{ ...baseFinding, verificationTier: "contextual" }} />)
+    expect(screen.getByText("Contextual")).toBeInTheDocument()
+  })
+
   it("omits the line number when the finding has none", () => {
     render(<FindingCard finding={{ ...baseFinding, line: undefined }} />)
     expect(screen.getByText("app/services/github_client.py")).toBeInTheDocument()
