@@ -21,7 +21,7 @@ that were already filtered out earlier in this same function.
 import logging
 from pathlib import Path
 
-from app.graph.state import ReviewState, Finding, ResetFindings
+from app.graph.state import ReviewState, Finding, ClearAgentFindings, RejectedClaim
 from app.graph.verification.symbol_lookup import (
     verify_symbol_exists,
     verify_dependency_edge_or_raise,
@@ -53,7 +53,7 @@ class UnverifiableFindingError(Exception):
     """Raised when a mandatory-verification agent's finding names no checkable ref at all."""
 
 
-def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
+def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
     """
     Exact AST/symbol verification of every finding before it's trusted.
 
@@ -79,11 +79,18 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
     match any spec rule) is `contextual` — real, but not independently
     proven to be a genuine defect.
 
-    Returns (verified findings, count of hallucinated/dropped findings).
+    Note: symbol_lookup.py's near-miss fallback means a claim that matches
+    only after path normalization or barrel resolution is NOT hallucinated
+    here — it's logged as a "near_miss_graph_gap" and passed straight
+    through, so it never reaches the except block below at all.
+
+    Returns (verified findings, dropped/hallucinated findings — the latter
+    used by the caller to decide whether to retry and, if so, to build the
+    rejected-claims list Agent 2A's re-prompt reads).
     """
     boundary_spec = load_default_boundary_spec()
     verified: list[Finding] = []
-    hallucinated_count = 0
+    hallucinated: list[Finding] = []
 
     for finding in state.findings:
         try:
@@ -109,9 +116,9 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], int]:
                 finding.verification_tier = "contextual"
             verified.append(finding)
         except (SymbolLookupError, DependencyEdgeLookupError, UnverifiableFindingError):
-            hallucinated_count += 1
+            hallucinated.append(finding)
 
-    return verified, hallucinated_count
+    return verified, hallucinated
 
 
 def _decide_hitl_severity(verified_findings: list[Finding]) -> str:
@@ -194,7 +201,7 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
 
 
 async def agent_3_critic(state: ReviewState) -> dict:
-    verified_findings, hallucinated_count = _verify_findings(state)
+    verified_findings, hallucinated_findings = _verify_findings(state)
 
     # ACS is denominated in dependency-graph edges, so only architecture
     # findings (Agent 2A — the only agent whose findings are claims about
@@ -217,7 +224,15 @@ async def agent_3_critic(state: ReviewState) -> dict:
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 
-    should_retry = hallucinated_count > 0 and state.hallucination_retry_count < get_settings().hallucination_retry_cap
+    # Scoped to Agent 2A specifically: the retry edge (routing.py's
+    # route_after_critic -> workflow.py's "retry_structural_recheck") only
+    # re-invokes agent_2a_struct, not 2B/2C, so retrying is only worth
+    # doing when 2A itself is what hallucinated. A stray hallucinated ref
+    # from 2B/2C (neither is in MANDATORY_VERIFICATION_AGENTS, but either
+    # could still optionally set one) is dropped below same as always —
+    # it just can't trigger a retry that wouldn't fix it.
+    hallucinated_2a = [f for f in hallucinated_findings if f.agent == "agent_2a_struct"]
+    should_retry = bool(hallucinated_2a) and state.hallucination_retry_count < get_settings().hallucination_retry_cap
 
     prompt_template = PROMPT_PATH.read_text()
     narrative = await _generate_narrative(prompt_template, verified_findings)
@@ -238,15 +253,26 @@ async def agent_3_critic(state: ReviewState) -> dict:
         "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression, narrative),
     }
     if should_retry:
-        # ResetFindings, not `[]`: the retry edge (route_after_critic ->
-        # agent_1_gate) re-runs the fan-out, and `findings` uses an
-        # additive reducer everywhere else — an empty list would just
-        # append zero items, leaving this pass's (partly hallucinated)
-        # findings in place for the retry pass to pile on top of. This
-        # sentinel tells the reducer to replace instead. Omitted entirely
-        # on the non-retry path — returning state.findings here would
-        # double it through that same additive reducer.
-        result["findings"] = ResetFindings()
+        # ClearAgentFindings("agent_2a_struct"), not `[]` and not a full
+        # reset: the retry edge (route_after_critic -> agent_2a_struct
+        # only, see workflow.py) re-runs just Agent 2A, and `findings`
+        # uses an additive reducer everywhere else — an empty list would
+        # just append zero items, leaving this pass's hallucinated 2A
+        # findings in place for the retry to pile on top of. Scoping the
+        # clear to agent_2a_struct (rather than wiping everything, the old
+        # behavior) preserves 2B/2C's already-verified findings, since
+        # they aren't being re-run this pass. Omitted entirely on the
+        # non-retry path — returning state.findings here would double it
+        # through that same additive reducer.
+        result["findings"] = ClearAgentFindings(agent="agent_2a_struct")
+        result["rejected_claims"] = [
+            RejectedClaim(
+                symbol_ref=f.symbol_ref,
+                dependency_edge_ref=f.dependency_edge_ref,
+                description=f.description,
+            )
+            for f in hallucinated_2a
+        ]
     return result
 
 

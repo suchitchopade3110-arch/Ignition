@@ -249,15 +249,6 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         },
     )
 
-    # Tracks whether agent_1_gate's *next* appearance in the stream is a
-    # hallucination-retry re-entry (workflow.py's only edge back into
-    # agent_1_gate is agent_3_critic's "retry_context_fetch" branch) rather
-    # than the first, normal pass. Detected locally via "have we already
-    # seen the critic once" instead of reading graph/state internals —
-    # simple, and correct because retry_context_fetch is the ONLY path
-    # back to agent_1_gate (confirmed in workflow.py).
-    critic_seen_once = False
-
     try:
         # 2. Build Graph State
         ast_payload = await ast_client.analyze_git(
@@ -276,39 +267,15 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         # the PRD's bounded-self-correction philosophy: this is wall-clock's
         # counterpart to the hallucination-retry cap, not a whole-request timeout.
         async def _stream_graph():
-            nonlocal critic_seen_once
             async for state_update in graph.astream(initial_state):
                 for node_name, node_output in state_update.items():
                     if node_name == "agent_1_gate":
-                        if critic_seen_once:
-                            # Retry re-entry, not the first pass: reset
-                            # progress for every agent about to re-run, so
-                            # this pass's started/completed transitions and
-                            # findingCounts start clean instead of carrying
-                            # over "completed" from pass 1. Without this,
-                            # the "specialists done -> trigger critic" check
-                            # below silently never fires on a retry, since
-                            # it's gated on agent_3_critic still reading
-                            # "pending" — which it isn't, after pass 1.
-                            # agent_4_autofix is deliberately excluded: it
-                            # only ever runs after a pass that does NOT
-                            # retry, so it can't have stale "completed"
-                            # state to clean up here.
-                            for agent_id in (
-                                "agent_2a_struct", "agent_2b_chaos", "agent_2c_security", "agent_3_critic",
-                            ):
-                                agents_progress[agent_id]["status"] = "pending"
-                                agents_progress[agent_id]["findingCount"] = 0
-                            agents_progress["agent_1_gate"]["status"] = "running"
-                            await stream_manager.publish(
-                                review_id,
-                                {
-                                    "type": "agent.started",
-                                    "reviewId": review_id,
-                                    "agentId": "agent_1_gate",
-                                },
-                            )
-
+                        # Runs exactly once per review now — the
+                        # hallucination-retry edge (agent_3_critic's
+                        # "retry_structural_recheck") goes straight back to
+                        # agent_2a_struct alone, not through this gate (see
+                        # workflow.py), so there's no re-entry case to
+                        # detect here any more.
                         violation = node_output.get("hard_rule_violation", False)
                         agents_progress["agent_1_gate"]["status"] = "completed"
                         agents_progress["agent_1_gate"]["findingCount"] = 1 if violation else 0
@@ -376,7 +343,6 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             )
 
                     elif node_name == "agent_3_critic":
-                        critic_seen_once = True
                         agents_progress["agent_3_critic"]["status"] = "completed"
                         verified = node_output.get("verified_findings", [])
                         findings_count = len(verified)
@@ -450,6 +416,30 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 {
                                     "type": "regression.detected",
                                     "reviewId": review_id,
+                                },
+                            )
+
+                        # The narrow hallucination-retry edge (workflow.py:
+                        # agent_3_critic -> agent_2a_struct only) is about to
+                        # re-enter agent_2a_struct alone — reset just its and
+                        # the critic's own progress so the "specialists done
+                        # -> trigger critic" check below fires again on this
+                        # pass's agent_2a_struct completion. agent_2b_chaos/
+                        # agent_2c_security are deliberately left untouched:
+                        # they aren't being re-run, so their "completed"
+                        # status and findingCounts from pass 1 must survive.
+                        if node_output.get("critic_wants_retry"):
+                            agents_progress["agent_2a_struct"]["status"] = "running"
+                            agents_progress["agent_2a_struct"]["findingCount"] = 0
+                            agents_progress["agent_3_critic"]["status"] = "pending"
+                            agents_progress["agent_3_critic"]["findingCount"] = 0
+                            review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                            await stream_manager.publish(
+                                review_id,
+                                {
+                                    "type": "agent.started",
+                                    "reviewId": review_id,
+                                    "agentId": "agent_2a_struct",
                                 },
                             )
 

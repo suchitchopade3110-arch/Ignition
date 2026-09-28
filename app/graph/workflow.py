@@ -68,8 +68,8 @@ def route_after_critic_combined(state: ReviewState) -> str:
     the second of which pointed at a node ("hitl_check") that never existed.
     """
     retry_or_hitl = route_after_critic(state)
-    if retry_or_hitl == "retry_context_fetch":
-        return "retry_context_fetch"
+    if retry_or_hitl == "retry_structural_recheck":
+        return "retry_structural_recheck"
     return route_hitl(state)
 
 
@@ -108,7 +108,11 @@ def build_graph():
         "agent_3_critic",
         route_after_critic_combined,
         {
-            "retry_context_fetch": "agent_1_gate",
+            # Narrow retry: straight back to Agent 2A alone, not through
+            # Agent 1's full fan-out — a hallucinated Agent 2A finding
+            # doesn't call Agent 2B/2C's already-good findings into
+            # question, so re-running them on every retry was pure waste.
+            "retry_structural_recheck": "agent_2a_struct",
             "pause_for_human_approval": "pause_for_human_approval",
             "finalize_and_post": "agent_4_autofix",
         },

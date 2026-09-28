@@ -49,20 +49,41 @@ class Finding(BaseModel):
     verification_tier: VerificationTier = "contextual"
 
 
-class ResetFindings(list):
+class ClearAgentFindings(list):
     """
-    Sentinel subclass of list. When a node returns this as the `findings`
-    update, merge_findings replaces the accumulated list instead of
-    appending to it — used on the hallucination-retry edge (Critic ->
-    Agent 1) so a second pass's findings don't pile up on top of the first
-    pass's, which the additive reducer would otherwise do silently.
+    Sentinel subclass of list, tagged with the agent whose prior findings
+    should be dropped from the accumulated `findings` list on merge —
+    every other agent's findings pass through untouched. Used on the
+    narrow hallucination-retry edge (Critic -> Agent 2A only, see
+    routing.py/workflow.py): only Agent 2A gets re-run on retry, so only
+    its own (partly hallucinated) findings from the failed pass need to
+    go. 2B/2C aren't re-run that pass, so their already-verified findings
+    must survive instead of being wiped wholesale, which a plain
+    replace-the-whole-list reset would otherwise do.
     """
+
+    def __init__(self, agent: str):
+        super().__init__()
+        self.agent = agent
 
 
 def merge_findings(left: list[Finding], right: list[Finding]) -> list[Finding]:
-    if isinstance(right, ResetFindings):
-        return list(right)
+    if isinstance(right, ClearAgentFindings):
+        return [f for f in left if f.agent != right.agent]
     return left + right
+
+
+class RejectedClaim(BaseModel):
+    """
+    A symbol_ref/dependency_edge_ref claim that failed hallucination
+    verification on a prior Critic pass. Threaded back into the retry
+    re-prompt (agent_2a_structural.md via agent_2a_struct.py) so a retried
+    pass knows exactly which refs already didn't check out, instead of
+    blindly re-guessing (and likely re-failing) the same ones.
+    """
+    symbol_ref: str | None = None
+    dependency_edge_ref: tuple[str, str] | None = None
+    description: str
 
 
 class ReviewState(BaseModel):
@@ -92,8 +113,14 @@ class ReviewState(BaseModel):
     # overload acs_score is None for this, which was a placeholder hack).
     critic_wants_retry: bool = False
 
-    # Bounded retry loop control (Agent 3 -> Agent 1)
+    # Bounded retry loop control (Agent 3 -> Agent 2A)
     hallucination_retry_count: Annotated[int, operator.add] = 0
+
+    # Refs the Critic rejected as hallucinated on a prior pass, accumulated
+    # across retries (not reset) so a later attempt still knows what
+    # failed on an earlier one too. Read by agent_2a_struct on retry so its
+    # re-prompt can steer away from repeating them.
+    rejected_claims: Annotated[list[RejectedClaim], operator.add] = Field(default_factory=list)
 
     # Terminal
     final_comment_markdown: str | None = None
