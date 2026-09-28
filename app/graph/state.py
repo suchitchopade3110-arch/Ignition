@@ -47,6 +47,12 @@ class Finding(BaseModel):
     # allowed to upgrade a finding to "fact_checked", and only after proving
     # it against the boundary spec.
     verification_tier: VerificationTier = "contextual"
+    # Deterministic identity for "the same shape of finding" across PRs —
+    # set by agent_3_critic._finding_pattern_key alongside verification.
+    # Used to track HITL approve/reject history per pattern (not per
+    # review) so a pattern humans keep rejecting can be demoted; see
+    # LedgerRepository.record_hitl_outcome / get_consecutive_rejections.
+    pattern_key: str | None = None
 
 
 class ClearAgentFindings(list):

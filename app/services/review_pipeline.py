@@ -367,6 +367,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "recommendation": f.description,
                                 "suggestedFix": f.suggested_patch,
                                 "verificationTier": f.verification_tier,
+                                "patternKey": f.pattern_key,
                             })
 
                         regression_alert = {

@@ -33,6 +33,7 @@ from app.security import verify_github_signature, verify_csrf_token
 from app.schemas.github import PullRequestWebhook
 from app.services.redis_client import get_arq_pool
 from app.services.review_pipeline import review_repo, repo_repo
+from app.repositories.ledger import LedgerRepository
 from app.auth import (
     router as auth_router,
     get_current_user,
@@ -438,6 +439,32 @@ async def get_hitl_pending():
     return [HitlItem(**{**r, "waiting_since": r.get("created_at", now_str)}) for r in pending]
 
 
+def _record_hitl_outcomes(review: dict, repo_full_name: str, review_id: str, outcome: str) -> None:
+    """
+    Records the human's approve/reject decision against every distinct
+    finding pattern in this review (see agent_3_critic._finding_pattern_key
+    and LedgerRepository.record_hitl_outcome) — not just the review row's
+    own status column, which only ever tells you the outcome of whichever
+    review last happened to contain a given pattern. Best-effort: a
+    Supabase failure here must never fail the human's approve/reject
+    action itself, since this is a forward-looking learning signal, not
+    part of resolving the review.
+    """
+    pattern_keys = {f["patternKey"] for f in review.get("findings", []) if f.get("patternKey")}
+    if not pattern_keys:
+        return
+    ledger = LedgerRepository()
+    for pattern_key in pattern_keys:
+        try:
+            ledger.record_hitl_outcome(
+                repo_full_name=repo_full_name, review_id=review_id, pattern_key=pattern_key, outcome=outcome,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to record HITL outcome for pattern %s on review %s", pattern_key, review_id,
+            )
+
+
 @api_router.post("/hitl/{review_id}/approve", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
@@ -471,6 +498,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         set_correlation_id(gh_context["correlation_id"])
 
     review_repo.update_review(review_id, {"status": "completed"})
+    _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
 
     # Post final comment to GitHub. A failure here is surfaced to the
     # caller (502), not swallowed — silently returning success while the
@@ -516,6 +544,10 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
         raise HTTPException(status_code=404, detail="Review not found")
 
     review_repo.update_review(review_id, {"status": "completed"})  # or failed/rejected
+
+    gh_context = review_repo.get_review_github_context(review_id)
+    if gh_context and gh_context.get("repo_full_name"):
+        _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "rejected")
 
     await stream_manager.publish(review_id, {"type": "hitl.rejected", "reviewId": review_id})
     await stream_manager.publish(

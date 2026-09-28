@@ -50,6 +50,11 @@ def fake_review(monkeypatch):
             "pr_number": 7,
             "final_comment_markdown": "## Review\nLooks fine.",
             "correlation_id": "corr-1",
+            "findings": [
+                {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
+                {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
+                {"patternKey": "agent_2c_security:high:cve", "severity": "high"},
+            ],
         }
     }
 
@@ -97,6 +102,34 @@ async def test_approve_hitl_posts_comment_and_publishes_events(override_auth, fa
 
 
 @pytest.mark.asyncio
+async def test_approve_hitl_records_outcome_per_distinct_finding_pattern(override_auth, fake_review):
+    mock_gh_instance = MagicMock()
+    mock_gh_instance.post_review_comment.return_value = {
+        "id": 123, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-123",
+    }
+    mock_ledger = MagicMock()
+    with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance), \
+         patch.object(stream_manager, "publish", new=AsyncMock()), \
+         patch("app.main.LedgerRepository", return_value=mock_ledger):
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/hitl/review-1/approve")
+
+    assert response.status_code == 200
+    # Two findings share one pattern_key -> one call for it, not two, plus
+    # one call for the distinct second pattern -> 2 calls total, not 3.
+    assert mock_ledger.record_hitl_outcome.call_count == 2
+    recorded = {c.kwargs["pattern_key"]: c.kwargs["outcome"] for c in mock_ledger.record_hitl_outcome.call_args_list}
+    assert recorded == {
+        "agent_2a_struct:boundary:repositories->routes": "approved",
+        "agent_2c_security:high:cve": "approved",
+    }
+    for c in mock_ledger.record_hitl_outcome.call_args_list:
+        assert c.kwargs["repo_full_name"] == "acme/widgets"
+        assert c.kwargs["review_id"] == "review-1"
+
+
+@pytest.mark.asyncio
 async def test_approve_hitl_surfaces_github_post_failure_as_502(override_auth, fake_review):
     """A failed GitHub post must not be swallowed into a false success —
     this is the exact failure mode app/main.py's own docstring calls out."""
@@ -135,6 +168,24 @@ async def test_reject_hitl_publishes_rejected_events(override_auth, fake_review)
     published_types = [call.args[1]["type"] for call in mock_publish.await_args_list]
     assert "hitl.rejected" in published_types
     assert "review.completed" in published_types
+
+
+@pytest.mark.asyncio
+async def test_reject_hitl_records_outcome_per_distinct_finding_pattern(override_auth, fake_review):
+    mock_ledger = MagicMock()
+    with patch.object(stream_manager, "publish", new=AsyncMock()), \
+         patch("app.main.LedgerRepository", return_value=mock_ledger):
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/hitl/review-1/reject")
+
+    assert response.status_code == 200
+    assert mock_ledger.record_hitl_outcome.call_count == 2
+    recorded = {c.kwargs["pattern_key"]: c.kwargs["outcome"] for c in mock_ledger.record_hitl_outcome.call_args_list}
+    assert recorded == {
+        "agent_2a_struct:boundary:repositories->routes": "rejected",
+        "agent_2c_security:high:cve": "rejected",
+    }
 
 
 @pytest.mark.asyncio

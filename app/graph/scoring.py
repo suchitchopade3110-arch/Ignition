@@ -3,6 +3,27 @@ Architecture Compliance Score (ACS) + regression comparison against the
 Supabase baseline. Isolated from agent_3_critic.py so the divide-by-zero
 edge case (flagged in the PRD) is testable without the LLM/graph layer.
 """
+from app.schemas.ast_payload import DependencyEdge
+
+
+def diff_scoped_dependency_count(dependency_graph: list[DependencyEdge], changed_files: list[str]) -> int:
+    """
+    Counts only the dependency-graph edges that originate from a file this
+    PR actually changed, instead of the whole repo's edge count.
+
+    A whole-repo denominator makes ACS numerically inert: a 3-edge diff
+    landing a real violation in a 2,000-edge repo moves the score by a
+    fraction of a point, so the number a reviewer sees never reflects what
+    the PR itself did. Scoping to changed_files makes the score measure
+    this diff, at the cost of being noisier PR-to-PR (see
+    regression_tolerance in app/config.py, re-tuned for that noise).
+
+    from_file (not to_file) is the scoping edge: an edge "belongs" to the
+    diff when the file doing the importing is one this PR touched — that's
+    the file whose import statements could actually have changed.
+    """
+    changed = set(changed_files)
+    return sum(1 for edge in dependency_graph if edge.from_file in changed)
 
 
 def compute_acs(total_dependencies: int, total_violations: int) -> float:
