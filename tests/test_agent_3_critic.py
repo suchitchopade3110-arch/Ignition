@@ -45,9 +45,9 @@ class TestVerifyFindings:
             agent="agent_2a_struct", file_path="a.ts", description="doThing is unsafe",
             severity="high", symbol_ref="doThing",
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == [finding]
-        assert hallucinated_count == 0
+        assert hallucinated == []
 
     def test_symbol_ref_naming_nonexistent_symbol_is_dropped(self):
         ast_payload = _ast_payload(symbols=[])
@@ -55,9 +55,9 @@ class TestVerifyFindings:
             agent="agent_2a_struct", file_path="a.ts", description="madeUpFn is unsafe",
             severity="high", symbol_ref="madeUpFn",
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == []
-        assert hallucinated_count == 1
+        assert hallucinated == [finding]
 
     def test_dependency_edge_ref_matching_real_edge_is_kept(self):
         ast_payload = _ast_payload(
@@ -67,9 +67,9 @@ class TestVerifyFindings:
             agent="agent_2a_struct", file_path="api.ts", description="layer crossing",
             severity="medium", dependency_edge_ref=("api.ts", "db.ts"),
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == [finding]
-        assert hallucinated_count == 0
+        assert hallucinated == []
 
     def test_dependency_edge_ref_naming_nonexistent_edge_is_dropped(self):
         ast_payload = _ast_payload(dependency_graph=[])
@@ -77,9 +77,9 @@ class TestVerifyFindings:
             agent="agent_2a_struct", file_path="api.ts", description="layer crossing",
             severity="medium", dependency_edge_ref=("api.ts", "db.ts"),
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == []
-        assert hallucinated_count == 1
+        assert hallucinated == [finding]
 
     def test_finding_with_no_ref_passes_through_unverified(self):
         # Security/supply-chain findings (Agent 2C) have no AST claim to
@@ -90,9 +90,9 @@ class TestVerifyFindings:
             agent="agent_2c_security", file_path="package.json",
             description="Known vulnerability in left-pad@1.0.0", severity="high",
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == [finding]
-        assert hallucinated_count == 0
+        assert hallucinated == []
 
     def test_architecture_finding_with_no_ref_at_all_is_dropped(self):
         # The gap this closes: verification used to be opt-in from the
@@ -104,9 +104,9 @@ class TestVerifyFindings:
             agent="agent_2a_struct", file_path="a.ts", description="something seems off",
             severity="medium",
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == []
-        assert hallucinated_count == 1
+        assert hallucinated == [finding]
 
     def test_non_architecture_finding_with_no_ref_still_passes_through(self):
         # Mandatory verification is scoped to Agent 2A only — Agent 2B
@@ -118,9 +118,9 @@ class TestVerifyFindings:
             agent="agent_2b_chaos", file_path="a.ts", description="possible N+1 pattern",
             severity="medium",
         )
-        verified, hallucinated_count = _verify_findings(_state([finding], ast_payload))
+        verified, hallucinated = _verify_findings(_state([finding], ast_payload))
         assert verified == [finding]
-        assert hallucinated_count == 0
+        assert hallucinated == []
 
     def test_mixed_batch_drops_only_the_hallucinated_one(self):
         ast_payload = _ast_payload(
@@ -132,9 +132,9 @@ class TestVerifyFindings:
         fake = Finding(
             agent="agent_2a_struct", file_path="a.ts", description="fake", severity="low", symbol_ref="fake",
         )
-        verified, hallucinated_count = _verify_findings(_state([real, fake], ast_payload))
+        verified, hallucinated = _verify_findings(_state([real, fake], ast_payload))
         assert verified == [real]
-        assert hallucinated_count == 1
+        assert hallucinated == [fake]
 
 
 class TestVerificationTier:
@@ -235,7 +235,7 @@ class TestAgentThreeCriticNode:
         assert result["acs_score"] == 75.0
 
     @pytest.mark.asyncio
-    async def test_hallucination_triggers_retry_and_resets_findings(self, monkeypatch):
+    async def test_hallucination_triggers_retry_and_clears_only_agent_2a_findings(self, monkeypatch):
         self._patch_common(monkeypatch)
         ast_payload = _ast_payload(symbols=[])  # nothing matches -> hallucination
         findings = [
@@ -246,10 +246,62 @@ class TestAgentThreeCriticNode:
             result = await agent_3_critic(state)
         assert result["critic_wants_retry"] is True
         assert result["hallucination_retry_count"] == 1
-        # ResetFindings sentinel, not a plain empty list that would just
-        # append zero items via the additive reducer.
-        from app.graph.state import ResetFindings
-        assert isinstance(result["findings"], ResetFindings)
+        # ClearAgentFindings sentinel scoped to agent_2a_struct, not a
+        # plain empty list (which would just append zero items via the
+        # additive reducer) and not a full wipe of every agent's findings.
+        from app.graph.state import ClearAgentFindings
+        assert isinstance(result["findings"], ClearAgentFindings)
+        assert result["findings"].agent == "agent_2a_struct"
+
+    @pytest.mark.asyncio
+    async def test_hallucination_triggers_retry_and_records_rejected_claims(self, monkeypatch):
+        self._patch_common(monkeypatch)
+        ast_payload = _ast_payload(symbols=[])
+        findings = [
+            Finding(agent="agent_2a_struct", file_path="a", description="fake", severity="low", symbol_ref="ghost"),
+        ]
+        state = _state(findings, ast_payload, hallucination_retry_count=0)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        assert len(result["rejected_claims"]) == 1
+        assert result["rejected_claims"][0].symbol_ref == "ghost"
+        assert result["rejected_claims"][0].description == "fake"
+
+    @pytest.mark.asyncio
+    async def test_retry_preserves_agent_2b_and_2c_findings_from_the_same_pass(self, monkeypatch):
+        # Only agent_2a_struct is re-run on retry (see workflow.py's narrow
+        # retry edge) — 2B/2C's already-verified findings from this same
+        # pass must not be discarded just because 2A hallucinated.
+        self._patch_common(monkeypatch)
+        ast_payload = _ast_payload(symbols=[])
+        findings = [
+            Finding(agent="agent_2a_struct", file_path="a", description="fake", severity="low", symbol_ref="ghost"),
+            Finding(agent="agent_2b_chaos", file_path="b", description="real N+1", severity="medium"),
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
+        ]
+        state = _state(findings, ast_payload, hallucination_retry_count=0)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        from app.graph.state import merge_findings
+        merged = merge_findings(state.findings, result["findings"])
+        assert [f.agent for f in merged] == ["agent_2b_chaos", "agent_2c_security"]
+
+    @pytest.mark.asyncio
+    async def test_hallucination_from_non_2a_agent_does_not_trigger_retry(self, monkeypatch):
+        # The retry edge only re-invokes agent_2a_struct, so a hallucinated
+        # ref from an agent that isn't 2A can't be fixed by retrying —
+        # retrying would be pure waste, not just ineffective.
+        self._patch_common(monkeypatch)
+        ast_payload = _ast_payload(symbols=[])
+        findings = [
+            Finding(agent="agent_2b_chaos", file_path="a", description="fake", severity="low", symbol_ref="ghost"),
+        ]
+        state = _state(findings, ast_payload, hallucination_retry_count=0)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        assert result["critic_wants_retry"] is False
+        assert "findings" not in result
+        assert result["verified_findings"] == []
 
     @pytest.mark.asyncio
     async def test_retry_capped_by_settings(self, monkeypatch):

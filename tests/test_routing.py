@@ -42,7 +42,7 @@ def test_route_hitl_continues_on_non_critical():
 
 def test_route_after_critic_retries_when_requested_and_under_cap():
     state = _base_state(critic_wants_retry=True, hallucination_retry_count=0)
-    assert route_after_critic(state) == "retry_context_fetch"
+    assert route_after_critic(state) == "retry_structural_recheck"
 
 
 def test_route_after_critic_stops_retrying_once_cap_reached():

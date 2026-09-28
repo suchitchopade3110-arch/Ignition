@@ -7,7 +7,8 @@ graph. Pulled out of workflow.py so:
 Three routing decisions matter per the PRD, and all three are enumerable /
 deterministic by design — no fuzzy thresholds:
   - hard-rule gate (Agent 1)
-  - hallucination retry loop, capped (Agent 3 -> Agent 1)
+  - hallucination retry loop, capped (Agent 3 -> Agent 2A only — a narrow
+    edge, not back through Agent 1's full fan-out; see workflow.py)
   - HITL severity gate (Agent 3 -> pause or continue)
 """
 from app.config import get_settings
@@ -25,11 +26,17 @@ def route_after_critic(state: ReviewState) -> str:
     """
     Hallucination retry loop with a hard cap — prevents infinite cycles
     and runaway API cost. Cap is a config value, not a magic number.
+
+    Routes to Agent 2A alone, not back through Agent 1's full fan-out:
+    `critic_wants_retry` is only ever set when Agent 2A itself produced a
+    hallucinated finding (see agent_3_critic.py), so re-running Agent 2B/2C
+    on that same retry would just re-spend their (already-good) findings
+    for no reason — see workflow.py's "retry_structural_recheck" edge.
     """
     settings = get_settings()
 
     if state.critic_wants_retry and state.hallucination_retry_count < settings.hallucination_retry_cap:
-        return "retry_context_fetch"
+        return "retry_structural_recheck"
 
     return "route_hitl"
 

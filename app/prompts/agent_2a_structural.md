@@ -17,6 +17,8 @@ Dependency graph for this PR:
 Declared symbols in the changed files (from the AST analyzer):
 {symbols}
 
+{rejected_claims}
+
 When a finding has an unambiguous, mechanical fix (e.g., a renamed
 field, a corrected import path, a type annotation fix), include a
 "suggested_patch" field containing ONLY the corrected line(s) of code
