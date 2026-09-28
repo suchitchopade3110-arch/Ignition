@@ -42,10 +42,24 @@ name: CI
 # postcss, sharp, js-yaml, fast-uri, brace-expansion) that need triage
 # before this can block merges without immediately going red; the job
 # still surfaces them in every run's logs so they can't go unnoticed.
+#
+# The `golden-eval` job runs scripts/run_golden_eval.py (tests/eval/) —
+# the review-quality harness (precision/recall against the hand-labeled
+# golden-PR fixtures). Manual (workflow_dispatch) only, never on
+# push/pull_request: it makes real, billed LLM calls per fixture, and a
+# real Supabase baseline lookup that isn't mocked here the way the `test`
+# job mocks it (see run_golden_eval.py's module docstring), so running it
+# on every PR would be real cost on every commit, not CI signal. Needs
+# LLM_API_KEY/LLM_PROVIDER/LLM_MODEL_NAME and
+# SUPABASE_URL/SUPABASE_SERVICE_KEY set as real repo secrets (Settings ->
+# Secrets and variables -> Actions) — trigger it from the Actions tab
+# ("Run workflow") when checking whether a prompt/verification change
+# moved the numbers, not automatically.
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -178,3 +192,37 @@ jobs:
         working-directory: ast-analyzer
         continue-on-error: true
         run: bun audit
+
+  golden-eval:
+    # Manual only — see the comment on the `workflow_dispatch` trigger
+    # above for why this never runs on push/pull_request.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_APP_ID: "12345"
+      GITHUB_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nDUMMY\n-----END RSA PRIVATE KEY-----"
+      GITHUB_WEBHOOK_SECRET: "test-webhook-secret"
+      GITHUB_CLIENT_ID: "dummy-client-id"
+      GITHUB_CLIENT_SECRET: "dummy-client-secret"
+      # Real, billed values — required repo secrets, unlike the `test`
+      # job's dummy LLM/Supabase env above (that job mocks every external
+      # call; this one deliberately doesn't).
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL_NAME: ${{ secrets.LLM_MODEL_NAME }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      AST_SERVICE_URL: "http://localhost:4000"
+      REDIS_URL: "redis://localhost:6379/0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run golden-PR eval
+        run: python scripts/run_golden_eval.py

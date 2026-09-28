@@ -58,8 +58,21 @@ def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
     # a dependency edge that crosses a layer boundary the spec declares
     # disallowed is a hard rule violation, checked by exact glob match
     # against the real dependency graph, no LLM involved.
+    #
+    # Scoped to edges this PR's diff actually introduces (from_file in
+    # changed_files), the same scoping diff_scoped_dependency_count uses for
+    # ACS — not the whole ast_payload.dependency_graph. That payload can
+    # carry edges from anywhere in the repo (see that function's docstring);
+    # without this scoping, a pre-existing violation the PR never touches
+    # would hard-reject every unrelated PR that happens to share an AST
+    # payload with it, forever, which isn't "this PR introduced a hard
+    # violation" — the only claim the gate is meant to make.
     boundary_spec = load_default_boundary_spec()
-    for violation in check_boundary_violations(state.ast_payload.dependency_graph, boundary_spec):
+    changed_files = set(state.ast_payload.changed_files)
+    diff_scoped_edges = [
+        edge for edge in state.ast_payload.dependency_graph if edge.from_file in changed_files
+    ]
+    for violation in check_boundary_violations(diff_scoped_edges, boundary_spec):
         violations.append(
             f"boundary violation: {violation.from_file} ({violation.from_layer}) -> "
             f"{violation.to_file} ({violation.to_layer}) is a disallowed layer crossing"

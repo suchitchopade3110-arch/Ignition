@@ -98,6 +98,16 @@ Every layer has its own test suite, and CI (`.github/workflows/ci.yml`) runs all
 
 Dependency scanning runs as its own CI job: `pip-audit` against `requirements.txt` is blocking (the backend tree is currently clean), while `npm audit`/`bun audit` are informational for now — both trees carry pre-existing high-severity transitive advisories that need triage before they can gate merges. [Dependabot](./.github/dependabot.yml) opens weekly update PRs across pip, npm, bun, both Dockerfiles, and the GitHub Actions themselves.
 
+## Review quality — does it actually work?
+
+Everything above proves the *plumbing* is correct: the gate rejects what it should, routing forks and joins correctly, scoring math is right, verification correctly drops a fabricated symbol/edge. None of it proves the agents' findings are actually good review — that a real PR with a real architecture bug gets flagged, and a real clean PR doesn't get noise.
+
+That's what [`tests/eval/`](./tests/eval/) measures: 23 hand-labeled golden-PR fixtures (mixing clean PRs with deliberately planted bugs across architecture, logic, and security), scored for precision/recall against each agent's actual output via [`scripts/run_golden_eval.py`](./scripts/run_golden_eval.py). It's deliberately not a pytest suite — it makes real LLM calls (and a real Supabase baseline lookup), so it isn't deterministic or free, and it isn't wired into CI on every push (see the `golden-eval` job in [`ci.yml`](./.github/workflows/ci.yml), `workflow_dispatch`-only for that reason). [`tests/eval/test_golden_eval_harness.py`](./tests/eval/test_golden_eval_harness.py) *does* run in CI — it proves the scoring math itself is correct on synthetic data, so the harness is trustworthy the moment someone runs it for real.
+
+The fixture set is also what makes the **Fact-checked** / **Contextual** distinction (above) an honest claim rather than an assumed one: one fixture (`fact_checked_repository_reaches_routes_via_barrel`) exists specifically to prove `fact_checked` is reachable at all, not dead code — a direct, one-hop boundary violation is caught by the deterministic gate for free and never reaches the Critic, so a genuine `fact_checked` verdict only happens through the less obvious two-hop/barrel-resolution path the gate doesn't check. Two more fixtures assert the gate itself: a banned `eval(` call and a direct boundary-crossing import both expect the PR to be hard-rejected before any agent runs at all.
+
+**Numbers pending an actual run.** The harness has real fixtures and passes its own structural checks, but nobody has pointed it at a live model yet — running it needs a billed `LLM_API_KEY` (and Supabase credentials for the baseline lookup) that aren't provisioned in this environment. Until that happens, treat the tier claims above as *what the code does*, not *a measured precision/recall number* — this section will report real figures (precision, recall, hallucination-drop rate, cost/latency per review) as soon as someone runs `python scripts/run_golden_eval.py` for real and the numbers land here.
+
 ## Deploying to production
 
 Want to deploy on Render specifically? `render.yaml` at the repo root is a
