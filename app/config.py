@@ -119,13 +119,26 @@ class Settings(BaseModel):
     # the LLM with no registry data behind it at all.
     slopsquat_fresh_package_days: int = 7
 
-    # ACS is a single dependency-edge-count ratio, sensitive to a PR that
-    # happens to touch one extra edge even with no real quality change.
-    # A small non-zero tolerance means "dropped below baseline" requires a
-    # drop that actually means something, not any strictly-less-than
-    # comparison against one stored float. 0.0 recovers the old strict
-    # behavior if a repo wants zero tolerance.
-    regression_tolerance: float = 1.0
+    # ACS is now scored against the PR's own changed-file-scoped dependency
+    # edges (see scoring.diff_scoped_dependency_count), not the whole repo
+    # graph — a single violation in a typical small diff swings the score
+    # by tens of points, not a fraction of one. 1.0 was tuned for the old
+    # whole-repo ratio and would page a human on essentially every PR that
+    # introduces any violation at all under the new scale. 5.0 still
+    # catches a real violation in a small diff (which swings far more than
+    # that) while absorbing the smaller per-edge swings a larger diff
+    # produces. 0.0 recovers strict behavior if a repo wants zero tolerance.
+    regression_tolerance: float = 5.0
+
+    # How many consecutive human HITL rejections of the same finding
+    # pattern (see agent_3_critic._finding_pattern_key) it takes before
+    # that pattern's severity is demoted a level for future PRs — a
+    # pattern humans keep dismissing as a false positive shouldn't keep
+    # paging them at its original severity. Deliberately a hard threshold,
+    # not a rolling average: a single stale "approved" in the history
+    # should reset the streak rather than being averaged away (see
+    # LedgerRepository.get_consecutive_rejections).
+    hitl_demotion_threshold: int = 3
 
     # Rate limiting (slowapi/limits). storage_uri defaults to in-process
     # memory:// — see the comment on Limiter construction in app/main.py
@@ -166,7 +179,8 @@ class Settings(BaseModel):
             hallucination_retry_cap=int(kwargs.get("hallucination_retry_cap", os.getenv("HALLUCINATION_RETRY_CAP", "3"))),
             review_latency_budget_seconds=int(kwargs.get("review_latency_budget_seconds", os.getenv("REVIEW_LATENCY_BUDGET_SECONDS", "60"))),
             slopsquat_fresh_package_days=int(kwargs.get("slopsquat_fresh_package_days", os.getenv("SLOPSQUAT_FRESH_PACKAGE_DAYS", "7"))),
-            regression_tolerance=float(kwargs.get("regression_tolerance", os.getenv("REGRESSION_TOLERANCE", "1.0"))),
+            regression_tolerance=float(kwargs.get("regression_tolerance", os.getenv("REGRESSION_TOLERANCE", "5.0"))),
+            hitl_demotion_threshold=int(kwargs.get("hitl_demotion_threshold", os.getenv("HITL_DEMOTION_THRESHOLD", "3"))),
             rate_limit_storage_uri=kwargs.get("rate_limit_storage_uri", os.getenv("RATE_LIMIT_STORAGE_URI", "memory://")),
             default_rate_limit=kwargs.get("default_rate_limit", os.getenv("DEFAULT_RATE_LIMIT", "300/minute")),
             webhook_rate_limit=kwargs.get("webhook_rate_limit", os.getenv("WEBHOOK_RATE_LIMIT", "120/minute")),

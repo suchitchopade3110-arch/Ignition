@@ -14,11 +14,11 @@ from app.graph.state import Finding, ReviewState
 from app.schemas.ast_payload import ASTAnalyzerPayload, DependencyEdge, SymbolRef
 
 
-def _ast_payload(symbols=None, dependency_graph=None) -> ASTAnalyzerPayload:
+def _ast_payload(symbols=None, dependency_graph=None, changed_files=None) -> ASTAnalyzerPayload:
     return ASTAnalyzerPayload(
         repo_full_name="acme/widgets",
         pr_number=1,
-        changed_files=[],
+        changed_files=changed_files or [],
         symbols=symbols or [],
         dependency_graph=dependency_graph or [],
     )
@@ -197,10 +197,13 @@ class TestVerificationTier:
 class TestAgentThreeCriticNode:
     """Full-node behavior: ACS unit consistency, retry-loop wiring, HITL on regression."""
 
-    def _patch_common(self, monkeypatch, baseline_acs=None):
+    def _patch_common(self, monkeypatch, baseline_acs=None, consecutive_rejections=0):
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.LedgerRepository",
-            lambda: MagicMock(get_baseline=lambda repo: {"acs_score": baseline_acs} if baseline_acs is not None else None),
+            lambda: MagicMock(
+                get_baseline=lambda repo: {"acs_score": baseline_acs} if baseline_acs is not None else None,
+                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+            ),
         )
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.VectorStore",
@@ -214,7 +217,8 @@ class TestAgentThreeCriticNode:
     async def test_acs_only_counts_architecture_findings(self, monkeypatch):
         self._patch_common(monkeypatch)
         ast_payload = _ast_payload(
-            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])] * 4
+            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])] * 4,
+            changed_files=["a"],  # scopes all 4 edges into the diff-scoped denominator
         )
         # One architecture finding (counts toward ACS) + one security
         # finding (must NOT count toward ACS, since it isn't a claim about
@@ -321,7 +325,8 @@ class TestAgentThreeCriticNode:
     async def test_regression_always_escalates_to_critical(self, monkeypatch):
         self._patch_common(monkeypatch, baseline_acs=99.0)
         ast_payload = _ast_payload(
-            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])]
+            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])],
+            changed_files=["a"],
         )
         findings = [
             Finding(
@@ -340,7 +345,7 @@ class TestAgentThreeCriticNode:
         record_incident = AsyncMock()
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.LedgerRepository",
-            lambda: MagicMock(get_baseline=lambda repo: None),
+            lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key: 0),
         )
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.VectorStore",
@@ -351,7 +356,8 @@ class TestAgentThreeCriticNode:
         ast_payload = _ast_payload(
             dependency_graph=[
                 DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=[]),
-            ]
+            ],
+            changed_files=["app/repositories/ledger.py"],
         )
         findings = [
             # fact_checked: a real edge that matches a boundary-spec rule.
@@ -379,11 +385,14 @@ class TestAgentThreeCriticNode:
     @pytest.mark.asyncio
     async def test_regression_tolerance_absorbs_a_trivial_drop(self, monkeypatch):
         # A tiny drop against the baseline (0.5 points, under the default
-        # 1.0 tolerance) shouldn't page a human — that's exactly the noise
-        # regression_tolerance exists to absorb.
+        # 5.0 tolerance) shouldn't page a human — that's exactly the noise
+        # regression_tolerance exists to absorb. Needs a large diff-scoped
+        # edge count (200) to produce a small swing at all now that ACS is
+        # denominated in changed-file-scoped edges, not the whole repo.
         self._patch_common(monkeypatch, baseline_acs=100.0)
         ast_payload = _ast_payload(
-            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])] * 200
+            dependency_graph=[DependencyEdge(from_file="a", to_file="b", imported_symbols=[])] * 200,
+            changed_files=["a"],
         )
         findings = [
             Finding(
@@ -396,3 +405,124 @@ class TestAgentThreeCriticNode:
             result = await agent_3_critic(state)
         assert result["acs_score"] == 99.5
         assert result["is_regression"] is False
+
+
+class TestFindingPatternKey:
+    """
+    pattern_key is what HITL outcome tracking (LedgerRepository) and
+    severity demotion (_decide_hitl_severity) key off of — it must be a
+    fixed function of the finding, not the LLM's free-text description,
+    so the same underlying rule violation gets the same key every time.
+    """
+
+    def test_boundary_violation_finding_is_keyed_by_layer_pair(self):
+        ast_payload = _ast_payload(
+            dependency_graph=[
+                DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=[]),
+            ]
+        )
+        finding = Finding(
+            agent="agent_2a_struct", file_path="app/repositories/ledger.py", description="layering inversion",
+            severity="high", dependency_edge_ref=("app/repositories/ledger.py", "app/main.py"),
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].pattern_key == "agent_2a_struct:boundary:repositories->routes"
+
+    def test_same_layer_pair_from_different_files_gets_the_same_pattern_key(self):
+        # The whole point: two distinct file pairs that both violate the
+        # same repositories->routes rule are "the same shape of finding".
+        ast_payload = _ast_payload(
+            dependency_graph=[
+                DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=[]),
+                DependencyEdge(from_file="app/repositories/dashboard.py", to_file="app/main.py", imported_symbols=[]),
+            ]
+        )
+        findings = [
+            Finding(
+                agent="agent_2a_struct", file_path="app/repositories/ledger.py", description="layering inversion A",
+                severity="high", dependency_edge_ref=("app/repositories/ledger.py", "app/main.py"),
+            ),
+            Finding(
+                agent="agent_2a_struct", file_path="app/repositories/dashboard.py", description="layering inversion B",
+                severity="high", dependency_edge_ref=("app/repositories/dashboard.py", "app/main.py"),
+            ),
+        ]
+        verified, _ = _verify_findings(_state(findings, ast_payload))
+        assert verified[0].pattern_key == verified[1].pattern_key
+
+    def test_symbol_ref_finding_is_keyed_by_agent_file_and_symbol(self):
+        ast_payload = _ast_payload(
+            symbols=[SymbolRef(file_path="a.ts", symbol_name="doThing", kind="function", line=5)]
+        )
+        finding = Finding(
+            agent="agent_2a_struct", file_path="a.ts", description="doThing is unsafe",
+            severity="high", symbol_ref="doThing",
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].pattern_key == "agent_2a_struct:symbol:a.ts:doThing"
+
+    def test_finding_with_no_checkable_ref_falls_back_to_description_key(self):
+        ast_payload = _ast_payload()
+        finding = Finding(
+            agent="agent_2c_security", file_path="package.json",
+            description="Known vulnerability in left-pad@1.0.0", severity="high",
+        )
+        verified, _ = _verify_findings(_state([finding], ast_payload))
+        assert verified[0].pattern_key == "agent_2c_security:high:Known vulnerability in left-pad@1.0.0"
+
+
+class TestHitlSeverityDemotion:
+    """
+    _decide_hitl_severity demotes a finding's severity by one level once
+    its pattern has been rejected by a human hitl_demotion_threshold times
+    in a row — deterministic and reproducible given the same ledger state,
+    not a random or "sometimes lower" heuristic.
+    """
+
+    def _patch_common(self, monkeypatch, consecutive_rejections: int):
+        monkeypatch.setattr(
+            "app.graph.nodes.agent_3_critic.LedgerRepository",
+            lambda: MagicMock(
+                get_baseline=lambda repo: None,
+                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+            ),
+        )
+        monkeypatch.setattr("pathlib.Path.read_text", lambda self: "{verified_findings}")
+
+    @pytest.mark.asyncio
+    async def test_severity_demoted_after_threshold_consecutive_rejections(self, monkeypatch):
+        self._patch_common(monkeypatch, consecutive_rejections=3)  # == default hitl_demotion_threshold
+        ast_payload = _ast_payload()
+        findings = [
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
+        ]
+        state = _state(findings, ast_payload)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        assert result["hitl_severity"] == "medium"  # high demoted one step down
+
+    @pytest.mark.asyncio
+    async def test_severity_unchanged_below_threshold(self, monkeypatch):
+        self._patch_common(monkeypatch, consecutive_rejections=2)  # below the default threshold of 3
+        ast_payload = _ast_payload()
+        findings = [
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="high"),
+        ]
+        state = _state(findings, ast_payload)
+        with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+            result = await agent_3_critic(state)
+        assert result["hitl_severity"] == "high"
+
+    @pytest.mark.asyncio
+    async def test_demotion_is_deterministic_across_repeated_calls(self, monkeypatch):
+        self._patch_common(monkeypatch, consecutive_rejections=5)
+        ast_payload = _ast_payload()
+        findings = [
+            Finding(agent="agent_2c_security", file_path="package.json", description="cve", severity="critical"),
+        ]
+        results = []
+        for _ in range(3):
+            state = _state(findings, ast_payload)
+            with patch("app.graph.nodes.agent_3_critic.get_llm_client", return_value=MagicMock(complete=AsyncMock(return_value="narrative"))):
+                results.append((await agent_3_critic(state))["hitl_severity"])
+        assert results == ["high", "high", "high"]  # same input + same ledger state -> same demotion, every time

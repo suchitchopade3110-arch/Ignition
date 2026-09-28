@@ -28,8 +28,8 @@ from app.graph.verification.symbol_lookup import (
     SymbolLookupError,
     DependencyEdgeLookupError,
 )
-from app.graph.verification.boundary_spec import is_boundary_violation, load_default_boundary_spec
-from app.graph.scoring import compute_acs, is_rule_regression
+from app.graph.verification.boundary_spec import BoundarySpec, find_layer, is_boundary_violation, load_default_boundary_spec
+from app.graph.scoring import compute_acs, diff_scoped_dependency_count, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
 from app.services.llm_client import get_llm_client
@@ -101,6 +101,7 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
                         f"symbol_ref/dependency_edge_ref — unverifiable, treated as a hallucination."
                     )
                 finding.verification_tier = "contextual"
+                finding.pattern_key = _finding_pattern_key(finding, boundary_spec)
                 verified.append(finding)
                 continue
 
@@ -114,6 +115,7 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
                 )
             else:
                 finding.verification_tier = "contextual"
+            finding.pattern_key = _finding_pattern_key(finding, boundary_spec)
             verified.append(finding)
         except (SymbolLookupError, DependencyEdgeLookupError, UnverifiableFindingError):
             hallucinated.append(finding)
@@ -121,9 +123,69 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
     return verified, hallucinated
 
 
-def _decide_hitl_severity(verified_findings: list[Finding]) -> str:
-    """Structured severity enum — the ONLY thing that drives the HITL gate."""
-    severities = [f.severity for f in verified_findings]
+def _finding_pattern_key(finding: Finding, boundary_spec: BoundarySpec) -> str:
+    """
+    Deterministic identity for "the same shape of finding" across PRs, used
+    to track HITL approve/reject outcomes per pattern instead of per
+    review (see LedgerRepository.record_hitl_outcome).
+
+    A dependency-edge finding whose edge falls between two spec-declared
+    layers is keyed by that layer pair (e.g. "repositories->routes") —
+    that's the actual reusable *rule* being violated, and it recurs across
+    unrelated files/PRs the same way the boundary spec itself does. A
+    symbol-ref finding is keyed by the specific symbol, since there's no
+    layer-level rule to fall back to. Everything else (2B/2C findings, or
+    an edge that matched no layer) falls back to agent+severity+description
+    — coarser and less likely to recur verbatim, but still a fixed
+    function of the finding, never randomized or LLM-decided.
+    """
+    if finding.dependency_edge_ref:
+        from_file, to_file = finding.dependency_edge_ref
+        from_layer = find_layer(boundary_spec, from_file)
+        to_layer = find_layer(boundary_spec, to_file)
+        if from_layer and to_layer:
+            return f"{finding.agent}:boundary:{from_layer}->{to_layer}"
+    if finding.symbol_ref:
+        return f"{finding.agent}:symbol:{finding.file_path}:{finding.symbol_ref}"
+    return f"{finding.agent}:{finding.severity}:{finding.description}"
+
+
+SEVERITY_ORDER = ["none", "low", "medium", "high", "critical"]
+
+
+def _demoted_severity(severity: str, consecutive_rejections: int, threshold: int) -> str:
+    """
+    One step down SEVERITY_ORDER once a pattern has been rejected by a
+    human `threshold` times in a row, else unchanged. A single step, not
+    scaled by how far past the threshold the streak is — this only needs
+    to stop a stale pattern from paging at its original severity, not
+    model how "very rejected" it is.
+    """
+    if consecutive_rejections < threshold:
+        return severity
+    idx = SEVERITY_ORDER.index(severity)
+    return SEVERITY_ORDER[max(0, idx - 1)]
+
+
+def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository) -> str:
+    """
+    Structured severity enum — the ONLY thing that drives the HITL gate.
+
+    Still fully deterministic: for a fixed set of findings and a fixed
+    ledger state, this always returns the same answer. The only thing
+    "informed by history" is which severity each finding's pattern_key
+    resolves to before the max-of-severities reduction below — a pattern
+    with no rejection history (or fewer than hitl_demotion_threshold
+    consecutive ones) is untouched.
+    """
+    threshold = get_settings().hitl_demotion_threshold
+    severities = []
+    for f in verified_findings:
+        severity = f.severity
+        if f.pattern_key:
+            rejections = ledger.get_consecutive_rejections(f.pattern_key)
+            severity = _demoted_severity(severity, rejections, threshold)
+        severities.append(severity)
     if "critical" in severities:
         return "critical"
     if "high" in severities:
@@ -209,7 +271,11 @@ async def agent_3_critic(state: ReviewState) -> dict:
     # findings are real, but they're not violations of *this* graph, and
     # mixing them in would score a PR against a denominator it has nothing
     # to do with (see scoring.py's docstring).
-    total_deps = len(state.ast_payload.dependency_graph)
+    #
+    # Scoped to this PR's changed files, not the whole repo graph — see
+    # diff_scoped_dependency_count's docstring for why a whole-repo
+    # denominator makes the score numerically inert.
+    total_deps = diff_scoped_dependency_count(state.ast_payload.dependency_graph, state.ast_payload.changed_files)
     total_violations = sum(1 for f in verified_findings if f.agent == "agent_2a_struct")
     acs_score = compute_acs(total_deps, total_violations)
 
@@ -220,7 +286,7 @@ async def agent_3_critic(state: ReviewState) -> dict:
         acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
     )
 
-    hitl_severity = _decide_hitl_severity(verified_findings)
+    hitl_severity = _decide_hitl_severity(verified_findings, ledger)
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 

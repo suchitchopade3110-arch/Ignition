@@ -86,6 +86,10 @@ class Finding(CamelModel):
     # VerificationTier docstring — the dashboard must never show "verified"
     # for a tier this pipeline hasn't actually proven.
     verification_tier: Literal["fact_checked", "contextual"] = "contextual"
+    # Set by agent_3_critic._finding_pattern_key. Read by main.py's
+    # approve_hitl/reject_hitl to record per-pattern HITL outcomes; not
+    # every finding necessarily has one (defensive default only).
+    pattern_key: str | None = None
 
 class AgentProgress(CamelModel):
     id: str
