@@ -3,7 +3,11 @@ from app.graph.state import ReviewState
 from app.schemas.ast_payload import ASTAnalyzerPayload, DependencyEdge
 
 
-def _make_state(hard_rule_violations: list[str], dependency_graph: list[DependencyEdge] | None = None) -> ReviewState:
+def _make_state(
+    hard_rule_violations: list[str],
+    dependency_graph: list[DependencyEdge] | None = None,
+    changed_files: list[str] | None = None,
+) -> ReviewState:
     return ReviewState(
         repo_full_name="acme/widgets",
         pr_number=42,
@@ -11,7 +15,7 @@ def _make_state(hard_rule_violations: list[str], dependency_graph: list[Dependen
         ast_payload=ASTAnalyzerPayload(
             repo_full_name="acme/widgets",
             pr_number=42,
-            changed_files=[],
+            changed_files=changed_files or [],
             symbols=[],
             dependency_graph=dependency_graph or [],
             hard_rule_violations=hard_rule_violations,
@@ -76,7 +80,10 @@ def test_boundary_spec_violation_rejects():
     graph = [
         DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=["app"]),
     ]
-    result = agent_1_gate(_make_state([], dependency_graph=graph), diff_fetcher=lambda s: "")
+    result = agent_1_gate(
+        _make_state([], dependency_graph=graph, changed_files=["app/repositories/ledger.py"]),
+        diff_fetcher=lambda s: "",
+    )
     assert result["hard_rule_violation"] is True
     assert "boundary violation" in result["rejection_reason"]
     assert "app/repositories/ledger.py" in result["rejection_reason"]
@@ -86,5 +93,23 @@ def test_edge_with_no_boundary_rule_does_not_reject():
     graph = [
         DependencyEdge(from_file="app/graph/state.py", to_file="app/graph/scoring.py", imported_symbols=["compute_acs"]),
     ]
-    result = agent_1_gate(_make_state([], dependency_graph=graph), diff_fetcher=lambda s: "")
+    result = agent_1_gate(
+        _make_state([], dependency_graph=graph, changed_files=["app/graph/state.py"]),
+        diff_fetcher=lambda s: "",
+    )
+    assert result["hard_rule_violation"] is False
+
+
+def test_boundary_spec_violation_outside_diff_does_not_reject():
+    # A boundary violation whose from_file this PR never touched is a
+    # pre-existing edge somewhere else in the repo's graph, not something
+    # this PR introduced — the gate only rejects for what the diff itself
+    # did, same scoping as diff_scoped_dependency_count (see scoring.py).
+    graph = [
+        DependencyEdge(from_file="app/repositories/ledger.py", to_file="app/main.py", imported_symbols=["app"]),
+    ]
+    result = agent_1_gate(
+        _make_state([], dependency_graph=graph, changed_files=["app/graph/scoring.py"]),
+        diff_fetcher=lambda s: "",
+    )
     assert result["hard_rule_violation"] is False
