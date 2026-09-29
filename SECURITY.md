@@ -6,7 +6,7 @@ Ignition reviews other people's code, so we hold ourselves to a high bar on secu
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Instead, email **security@[YOUR-DOMAIN]** with:
+Instead, email **suchitchopade3110@gmail.com** with:
 
 - A description of the vulnerability and its potential impact
 - Steps to reproduce (proof-of-concept code or requests are welcome)
