@@ -23,10 +23,18 @@ REQUIRED_TABLES = (
 )
 
 
+# Read-only SQL functions the dashboard calls (migrations_019, I-10), with
+# arguments that touch no rows. Reported as "rpc:<name>".
+REQUIRED_FUNCTIONS = {
+    "dashboard_stats": {"repo_names": []},
+    "latest_review_per_repo": {"repo_names": []},
+}
+
+
 def find_missing_tables(db) -> list[str]:
-    """Tables that can't be read. limit(0) returns no rows, so this costs one
-    cheap round-trip per table. An unreachable database reports every table:
-    failing closed is the point."""
+    """Tables (and SQL functions) that can't be used. limit(0) returns no
+    rows, so this costs one cheap round-trip per table. An unreachable
+    database reports every one: failing closed is the point."""
     missing = []
     for table in REQUIRED_TABLES:
         try:
@@ -34,6 +42,13 @@ def find_missing_tables(db) -> list[str]:
         except Exception as exc:
             logger.error("Required table check failed", extra={"table": table, "error_class": type(exc).__name__})
             missing.append(table)
+    for function, params in REQUIRED_FUNCTIONS.items():
+        try:
+            db.rpc(function, params).execute()
+        except Exception as exc:
+            logger.error("Required function check failed",
+                         extra={"function": function, "error_class": type(exc).__name__})
+            missing.append(f"rpc:{function}")
     return missing
 
 

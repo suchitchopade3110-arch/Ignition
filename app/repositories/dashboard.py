@@ -153,8 +153,18 @@ class ReviewRepository:
             "status_reason": row.get("status_reason"),
         }
 
+    # Columns each read needs (I-10): never "*", which drags every review's
+    # raw diff_text (and, for lists, the per-file diffs JSON) along.
+    LIST_COLUMNS = (
+        "id, repo_full_name, pr_number, title, status, severity, findings_count, created_at, completed_at, "
+        "duration, acs_score, author, branch, commit_sha, previous_acs_score, regression, status_reason"
+    )
+    HITL_COLUMNS = LIST_COLUMNS + ", findings, agents, final_comment_markdown, hitl_severity"
+    DETAIL_COLUMNS = LIST_COLUMNS + ", findings, agents, diffs, github_comment_preview, final_comment_markdown"
+    LEDGER_COLUMNS = "status, acs_score, verified_findings, regression, created_at"
+
     def get_review(self, review_id: str) -> dict | None:
-        res = self._db.table(self.TABLE).select("*").eq("id", review_id).execute()
+        res = self._db.table(self.TABLE).select(self.DETAIL_COLUMNS).eq("id", review_id).execute()
         return self._map_review_row(res.data[0]) if res.data else None
 
     def list_reviews(self, repo_name: str = None, status: str = None, severity: str = None, page: int = 1, page_size: int = 25,
@@ -163,7 +173,7 @@ class ReviewRepository:
         # nothing to show — return without querying.
         if repo_names is not None and not repo_names:
             return [], 0
-        query = self._db.table(self.TABLE).select("*", count="exact")
+        query = self._db.table(self.TABLE).select(self.LIST_COLUMNS, count="exact")
         if repo_names is not None:
             query = query.in_("repo_full_name", sorted(repo_names))
         if repo_name:
@@ -184,7 +194,7 @@ class ReviewRepository:
     def list_hitl_pending(self, repo_names=None) -> list[dict]:
         if repo_names is not None and not repo_names:
             return []
-        query = self._db.table(self.TABLE).select("*")
+        query = self._db.table(self.TABLE).select(self.HITL_COLUMNS)
         if repo_names is not None:
             query = query.in_("repo_full_name", sorted(repo_names))
         res = query.eq("status", "waiting_hitl").order("created_at", desc=True).execute()
@@ -196,6 +206,17 @@ class ReviewRepository:
     def get_stats(self, repo_names=None) -> dict:
         if repo_names is not None and not repo_names:
             return {"activeReviews": 0, "hitlPending": 0, "avgAcsScore": 0.0, "issuesFound": 0, "issuesFoundTrend": None}
+        if repo_names is not None:
+            # One SQL function instead of four row-scanning queries (I-10).
+            res = self._db.rpc("dashboard_stats", {"repo_names": sorted(repo_names)}).execute()
+            stats = res.data or {}
+            return {
+                "activeReviews": int(stats.get("activeReviews") or 0),
+                "hitlPending": int(stats.get("hitlPending") or 0),
+                "avgAcsScore": round(float(stats.get("avgAcsScore") or 0), 1),
+                "issuesFound": int(stats.get("issuesFound") or 0),
+                "issuesFoundTrend": self._issues_found_trend(repo_names),
+            }
 
         # activeReviews: status="running"
         running_res = self._scoped(self._db.table(self.TABLE).select("id", count="exact"), repo_names).eq("status", "running").execute()
@@ -259,9 +280,14 @@ class ReviewRepository:
         pct_change = ((recent_total - prior_total) / prior_total) * 100
         return {"value": round(abs(pct_change), 1), "isPositive": pct_change >= 0}
 
+    def prune_old_diffs(self, older_than_days: int = 30) -> int:
+        """Retention (I-10): drops stored diffs from reviews older than
+        `older_than_days`; returns how many rows changed."""
+        res = self._db.rpc("prune_review_diffs", {"older_than_days": older_than_days}).execute()
+        return int(res.data or 0)
+
     def get_ledger_stats(self, repo_full_name: str) -> dict:
-        # Fetch reviews for repo
-        res = self._db.table(self.TABLE).select("*").eq("repo_full_name", repo_full_name).execute()
+        res = self._db.table(self.TABLE).select(self.LEDGER_COLUMNS).eq("repo_full_name", repo_full_name).execute()
         data = res.data or []
         
         completed = [r for r in data if r.get("status") in ("completed", "rejected") and r.get("acs_score") is not None]
@@ -291,7 +317,7 @@ class ReviewRepository:
         }
 
     def get_ledger_trend(self, repo_full_name: str) -> list[dict]:
-        res = self._db.table(self.TABLE).select("*").eq("repo_full_name", repo_full_name).execute()
+        res = self._db.table(self.TABLE).select(self.LEDGER_COLUMNS).eq("repo_full_name", repo_full_name).execute()
         data = res.data or []
         
         # Group by month (YYYY-MM)
@@ -399,7 +425,7 @@ class RepoRepository:
     def list_repos(self, repo_names=None) -> list[dict]:
         if repo_names is not None and not repo_names:
             return []
-        query = self._db.table(self.TABLE).select("*")
+        query = self._db.table(self.TABLE).select("id, owner, name, language, installed")
         if repo_names is not None:
             # repositories has no repo_full_name column; filter by the derived
             # id, then drop any row whose real owner/name isn't in the set
@@ -410,21 +436,18 @@ class RepoRepository:
         if repo_names is not None:
             repos = [r for r in repos if f"{r['owner']}/{r['name']}" in repo_names]
         
+        # Every repo's latest review in one query (I-10), not one per repo.
+        names = sorted(f"{r['owner']}/{r['name']}" for r in repos)
+        latest_by_repo = {}
+        if names:
+            latest_res = self._db.rpc("latest_review_per_repo", {"repo_names": names}).execute()
+            latest_by_repo = {row["repo_full_name"]: row for row in latest_res.data or []}
+
         results = []
         for r in repos:
             repo_id = r["id"]
             repo_full_name = f"{r['owner']}/{r['name']}"
-            
-            # Fetch latest review for status & acsScore
-            review_res = (
-                self._db.table("reviews")
-                .select("acs_score", "status", "created_at")
-                .eq("repo_full_name", repo_full_name)
-                .order("created_at", desc=True)
-                .limit(1)
-                .execute()
-            )
-            latest = review_res.data[0] if review_res.data else None
+            latest = latest_by_repo.get(repo_full_name)
             
             status = "healthy"
             acs_score = 100.0
@@ -454,7 +477,7 @@ class RepoRepository:
                 # `installed` column value cached here yet at the Python
                 # level if the DB migration hasn't run — default True
                 # matches the migration's own column default/backfill.
-                "installed": r.get("installed", True),
+                "installed": r.get("installed") if r.get("installed") is not None else True,
             })
         return results
 

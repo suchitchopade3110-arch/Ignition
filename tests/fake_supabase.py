@@ -142,8 +142,10 @@ class FakeQuery:
                 fk = row.get(f"{rel[:-1]}_id") if rel.endswith("s") else row.get(f"{rel}_id")
                 match = next((r for r in self._db.tables.get(rel, []) if r.get("id") == fk), None)
                 out[rel] = copy.deepcopy(match)
-            else:
-                out[tok] = row.get(tok)
+            elif tok in row:
+                # A key a sparse fixture row doesn't have is left out, as
+                # "*" would; a real row always has every column.
+                out[tok] = row[tok]
         return copy.deepcopy(out)
 
     def _sorted(self, rows):
@@ -155,6 +157,8 @@ class FakeQuery:
         db = self._db
         with db.lock:
             db.queries.append((self._table, self._op, tuple(self._filters)))
+            if self._op == "select":
+                db.selects.append((self._table, self._cols))
             rows = db.tables.setdefault(self._table, [])
             if self._op == "select":
                 matched = self._sorted([r for r in rows if self._match(r)])
@@ -214,8 +218,16 @@ class FakeSupabase:
         self.tables = {k: [copy.deepcopy(r) for r in v] for k, v in (tables or {}).items()}
         # table -> list of (columns tuple, optional predicate(row) -> bool)
         self.unique = unique or {}
-        self.rpcs: dict = {}
+        # Python mirrors of the SQL functions the app calls (migrations_019);
+        # a test can override any of them.
+        self.rpcs: dict = {
+            "dashboard_stats": _dashboard_stats,
+            "latest_review_per_repo": _latest_review_per_repo,
+            "prune_review_diffs": _prune_review_diffs,
+        }
         self.queries: list[tuple] = []
+        # (table, selected columns) for every select, to check column lists.
+        self.selects: list[tuple[str, str]] = []
         self.lock = threading.RLock()
 
     def table(self, name: str) -> FakeQuery:
@@ -267,3 +279,37 @@ class FakeAsyncRedis:
 
     async def exists(self, *keys):
         return sum(1 for k in keys if k in self.store)
+
+
+# --- Python mirrors of migrations_019's SQL functions -------------------------
+
+def _dashboard_stats(db, params):
+    names = set(params["repo_names"])
+    rows = [r for r in db.tables.get("reviews", []) if r.get("repo_full_name") in names]
+    completed = [float(r["acs_score"]) for r in rows if r.get("status") == "completed" and r.get("acs_score") is not None]
+    return {
+        "activeReviews": sum(1 for r in rows if r.get("status") == "running"),
+        "hitlPending": sum(1 for r in rows if r.get("status") == "waiting_hitl"),
+        "avgAcsScore": round(sum(completed) / len(completed), 1) if completed else 0,
+        "issuesFound": sum(int(r.get("findings_count") or 0) for r in rows),
+    }
+
+
+def _latest_review_per_repo(db, params):
+    latest: dict = {}
+    for r in db.tables.get("reviews", []):
+        name = r.get("repo_full_name")
+        if name in params["repo_names"] and (name not in latest or str(r["created_at"]) > str(latest[name]["created_at"])):
+            latest[name] = r
+    return [{k: latest[n].get(k) for k in ("repo_full_name", "acs_score", "status", "created_at")} for n in sorted(latest)]
+
+
+def _prune_review_diffs(db, params):
+    cutoff = datetime.now(timezone.utc).timestamp() - params.get("older_than_days", 30) * 86400
+    pruned = 0
+    for r in db.tables.get("reviews", []):
+        created = datetime.fromisoformat(str(r["created_at"]).replace("Z", "+00:00")).timestamp()
+        if created < cutoff and (r.get("diff_text") is not None or r.get("diffs") is not None):
+            r["diff_text"], r["diffs"] = None, None
+            pruned += 1
+    return pruned

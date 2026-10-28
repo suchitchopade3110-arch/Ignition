@@ -83,6 +83,16 @@ async def purge_expired_sessions(ctx: dict) -> int:
     return removed
 
 
+async def prune_old_review_diffs(ctx: dict) -> int:
+    """Daily retention (I-10): stored diffs older than 30 days are dropped;
+    the review rows, scores and findings stay."""
+    from app.repositories.dashboard import ReviewRepository
+
+    pruned = await asyncio.to_thread(ReviewRepository().prune_old_diffs, 30)
+    logger.info("Pruned old review diffs", extra={"pruned": pruned})
+    return pruned
+
+
 class WorkerSettings:
     # max_tries=1: a job cancelled by the shutdown drain timeout (or one
     # that raises) is a hard, final failure — run_review_job's
@@ -96,6 +106,7 @@ class WorkerSettings:
     functions = [func(run_review_job, max_tries=1), func(record_merge_baseline)]
     cron_jobs = [
         cron(purge_expired_sessions, hour=3, minute=17),
+        cron(prune_old_review_diffs, hour=3, minute=41),
         # Every minute (I-4); unique, so only one worker runs it at a time.
         cron(reconcile_cron, second=0, unique=True),
     ]

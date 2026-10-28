@@ -71,3 +71,15 @@ async def test_worker_startup_checks_tables_before_reconciling():
         with pytest.raises(SystemExit):
             await worker_module.on_startup({})
     reconcile.assert_not_awaited()
+
+
+def test_missing_sql_functions_are_reported_too():
+    # A deploy that skipped migrations_019 has every table but not the RPCs
+    # the dashboard calls (I-10); it must fail at startup, not on /api/stats.
+    schema_check = importlib.import_module("app.services.schema_check")
+    db = _db(set())
+    db.rpc.side_effect = lambda name, params: MagicMock(execute=MagicMock(side_effect=APIError(
+        {"code": "PGRST202", "message": f"Could not find the function public.{name}"})))
+    assert schema_check.find_missing_tables(db) == ["rpc:dashboard_stats", "rpc:latest_review_per_repo"]
+    db.rpc.side_effect = None
+    assert schema_check.find_missing_tables(db) == []
