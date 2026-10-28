@@ -1,6 +1,6 @@
 """
-P2 "Naive datetime.utcnow()": deprecated in Python 3.12 (the suite warned
-about it) and naive. Every timestamp is now datetime.now(timezone.utc).
+P2 "Naive utcnow": datetime's utcnow() is deprecated in Python 3.12 (the
+suite warned about it) and naive. Every timestamp is now datetime.now(timezone.utc).
 """
 import subprocess
 from datetime import datetime, timedelta, timezone
