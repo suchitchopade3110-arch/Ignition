@@ -40,7 +40,7 @@ from app.config import get_settings
 from app.services.redis_client import get_redis_settings
 from app.services.review_pipeline import run_review_job
 from app.services.merge_baseline import record_merge_baseline
-from app.services.reconciliation import reconcile_orphaned_reviews
+from app.services.reconciliation import reconcile_cron, reconcile_orphaned_reviews
 from app.services.logging_config import configure_logging
 from app.services.llm_client import get_llm_client
 from app.services.schema_check import require_tables_or_exit
@@ -93,7 +93,11 @@ class WorkerSettings:
     # one execution per review. A human re-triggering via a fresh webhook/
     # PR sync is the intended recovery path, not a background auto-retry.
     functions = [func(run_review_job, max_tries=1), func(record_merge_baseline)]
-    cron_jobs = [cron(purge_expired_sessions, hour=3, minute=17)]
+    cron_jobs = [
+        cron(purge_expired_sessions, hour=3, minute=17),
+        # Every minute (I-4); unique, so only one worker runs it at a time.
+        cron(reconcile_cron, second=0, unique=True),
+    ]
     redis_settings: RedisSettings = get_redis_settings()
     on_startup = on_startup
 

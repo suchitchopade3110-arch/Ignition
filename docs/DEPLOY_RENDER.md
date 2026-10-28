@@ -33,7 +33,7 @@ webhooks, and reviews will all fail. Have these ready:
 - **A Supabase project** (URL + service key) — Postgres + pgvector. Run the
   `migrations*.sql` files at the repo root against it, in order
   (`migrations.sql` first, then `migrations_002_...` through the
-  highest-numbered file, currently `migrations_017_...`) — Supabase's SQL
+  highest-numbered file, currently `migrations_018_...`) — Supabase's SQL
   Editor works fine for this, or `psql` if you'd rather. **Skipping 012
   makes every review that has a finding fail** (the Critic reads
   `hitl_finding_outcomes`). **013 turns on row-level security**: before

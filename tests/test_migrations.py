@@ -38,3 +38,15 @@ def test_review_status_gains_posting_and_rejected():
 
 def test_reviews_gain_a_check_run_id():
     assert "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS check_run_id BIGINT;" in _sql(16)
+
+
+def test_dedupe_index_becomes_partial_and_reviews_can_be_requeued():
+    # I-4: a failed or cancelled review can be redelivered for the same SHA;
+    # reconciliation needs the original event to re-enqueue and a timestamp
+    # for a stuck "posting" claim.
+    sql = _sql(18)
+    assert "DROP INDEX IF EXISTS reviews_repo_pr_head_sha_uidx;" in sql
+    assert ("CREATE UNIQUE INDEX reviews_repo_pr_head_sha_uidx ON reviews (repo_full_name, pr_number, commit_sha) "
+            "WHERE status NOT IN ('failed', 'cancelled');") in sql
+    assert "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS event_payload JSONB;" in sql
+    assert "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMP WITH TIME ZONE;" in sql

@@ -13,6 +13,8 @@ so there's one source of truth instead of two.
 """
 import asyncio
 import logging
+import os
+import socket
 import time
 from datetime import datetime
 
@@ -36,6 +38,22 @@ graph = build_graph()
 
 review_repo = ReviewRepository()
 repo_repo = RepoRepository()
+
+# Per-job heartbeat (I-4): reconciliation treats a running review with no
+# fresh key as orphaned, so a new worker never fails the old one's jobs.
+HEARTBEAT_INTERVAL_SECONDS = 10
+HEARTBEAT_TTL_SECONDS = 30
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def _heartbeat(redis, review_id: str) -> None:
+    key = f"review_hb:{review_id}"
+    while True:
+        try:
+            await redis.setex(key, HEARTBEAT_TTL_SECONDS, WORKER_ID)
+        except Exception:
+            logger.warning("Heartbeat write failed for %s", review_id, exc_info=True)
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 
 class _CheckRun:
@@ -160,6 +178,8 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     event = PullRequestWebhook.model_validate(event_payload)
     check = _CheckRun(event, review_id)
     exit_reason = "unexpected exit"
+    redis = ctx.get("redis")  # Arq's connection; absent when called directly
+    heartbeat = asyncio.create_task(_heartbeat(redis, review_id)) if redis is not None else None
     try:
         await _review_job_body(event, review_id, check)
     except BaseException as exc:
@@ -170,6 +190,16 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         # itself. This catches anything that escapes them (audit P0-6).
         if not check.concluded:
             await check.could_not_finish(exit_reason)
+        if heartbeat is not None:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+            try:
+                await redis.delete(f"review_hb:{review_id}")
+            except Exception:
+                logger.warning("Could not clear the heartbeat for %s", review_id, exc_info=True)
 
 
 async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _CheckRun) -> None:

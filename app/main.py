@@ -14,7 +14,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, APIRouter, BackgroundTasks, Query
@@ -383,14 +383,32 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # folded into the webhook payload dict where it'd be one more
     # unlabeled key nobody reading run_review_job's signature would think
     # to look for.
-    pool = await get_arq_pool()
-    # One job per (repo, PR, head SHA) (audit P1-8): Arq refuses a second job
-    # with the same id, so a redelivered event can't run the same SHA twice.
-    job = await pool.enqueue_job(
-        "run_review_job", event.model_dump(mode="json"), review_id, correlation_id,
-        _job_id=f"review:{event.repository.full_name}:{event.pull_request.number}:{event.pull_request.head_sha}",
+    event_payload = event.model_dump(mode="json")
+    try:
+        pool = await get_arq_pool()
+        # One job per (repo, PR, head SHA) (audit P1-8): Arq refuses a second
+        # job with the same id, so a redelivered event can't run the same SHA twice.
+        job = await pool.enqueue_job(
+            "run_review_job", event_payload, review_id, correlation_id,
+            _job_id=f"review:{event.repository.full_name}:{event.pull_request.number}:{event.pull_request.head_sha}",
+        )
+    except Exception:
+        # Never leave a row "queued" with no job behind it (I-4). The partial
+        # dedupe index lets a redelivery of this event create a fresh review.
+        logger.exception("Could not enqueue the review job", extra={"review_id": review_id})
+        status_reason = "failed: could not enqueue the review job"
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
+        await check_runs.conclude_check_run(
+            reviews=review_repo, review_id=review_id, installation_id=event.installation.id,
+            repo=event.repository.full_name, head_sha=event.pull_request.head_sha, conclusion="neutral",
+            title=check_runs.could_not_finish_title(status_reason), summary=status_reason,
+        )
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="enqueue_failed").inc()
+        raise HTTPException(status_code=503, detail="Could not queue the review; redeliver the webhook to retry")
+    # The event is kept so reconciliation can re-enqueue a lost job (I-4).
+    await asyncio.to_thread(
+        review_repo.update_review, review_id, {"job_id": job.job_id if job else None, "event_payload": event_payload}
     )
-    await asyncio.to_thread(review_repo.update_review, review_id, {"job_id": job.job_id if job else None})
     logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
     metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
 
@@ -550,8 +568,11 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # is one UPDATE ... WHERE status = 'waiting_hitl' RETURNING, so exactly
     # one concurrent approve wins; every other gets 409 and posts nothing.
     reviews = review_repo._db.table(review_repo.TABLE)
+    # status_changed_at lets reconciliation release a claim whose request
+    # died between claim and post (I-4: posting > 5 min -> waiting_hitl).
     claimed = await asyncio.to_thread(
-        reviews.update({"status": "posting"}).eq("id", review_id).eq("status", "waiting_hitl").execute
+        reviews.update({"status": "posting", "status_changed_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", review_id).eq("status", "waiting_hitl").execute
     )
     if not claimed.data:
         raise HTTPException(status_code=409, detail="Review is not awaiting approval")
