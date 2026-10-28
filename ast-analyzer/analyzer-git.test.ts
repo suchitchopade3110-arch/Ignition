@@ -112,4 +112,8 @@ describe("analyzer against a real git repo", () => {
     const mirror = path.join(root, "ws", "mirrors", "acme_widgets-fork.git");
     expect(sh(["rev-parse", "refs/ignition/pull/7"], mirror)).toBe(sha.fork);
   });
+  test("P1-9: destructured require('child_process').exec on an added line is flagged with its line", async () => {
+    const r = await analyze(sha.pr2, 2);
+    expect(r.hard_rule_violations).toEqual(["child_process.exec() call found in src/user.ts:3"]);
+  });
 });

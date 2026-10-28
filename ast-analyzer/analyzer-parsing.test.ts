@@ -201,3 +201,48 @@ describe("diffPackages", () => {
     ]);
   });
 });
+
+describe("detectHardRuleViolations — child_process bindings resolved, not text-matched (P1-9)", () => {
+  function violationsFor(code: string): string[] {
+    const project = projectWithFiles({ "a.ts": code });
+    return detectHardRuleViolations(project.getSourceFileOrThrow(`${SOURCE_DIR}/a.ts`), "a.ts");
+  }
+
+  test("flags a destructured require('child_process').exec", () => {
+    expect(violationsFor(`const { exec } = require("child_process");\nexec("ls");\n`)).toEqual([
+      "child_process.exec() call found in a.ts:2",
+    ]);
+  });
+
+  test("flags an aliased destructured execSync from node:child_process", () => {
+    expect(violationsFor(`const { execSync: run } = require("node:child_process");\nrun("ls");\n`)).toEqual([
+      "child_process.exec() call found in a.ts:2",
+    ]);
+  });
+
+  test("flags an aliased named import", () => {
+    expect(violationsFor(`import { exec as sh } from "child_process";\nsh("ls");\n`)).toEqual([
+      "child_process.exec() call found in a.ts:2",
+    ]);
+  });
+
+  test("flags a default import of node:child_process", () => {
+    expect(violationsFor(`import cpd from "node:child_process";\ncpd.execSync("ls");\n`)).toEqual([
+      "child_process.exec() call found in a.ts:2",
+    ]);
+  });
+
+  test("flags a module bound with const x = require('child_process')", () => {
+    expect(violationsFor(`const c = require("child_process");\nc.exec("ls");\n`)).toEqual([
+      "child_process.exec() call found in a.ts:2",
+    ]);
+  });
+
+  test("does not flag an unrelated object that happens to be named cp", () => {
+    expect(violationsFor(`const cp = { exec(s: string) { return s; } };\ncp.exec("ls");\n`)).toEqual([]);
+  });
+
+  test("does not flag an exec imported from some other module", () => {
+    expect(violationsFor(`import { exec } from "./db";\nexec("select 1");\n`)).toEqual([]);
+  });
+});

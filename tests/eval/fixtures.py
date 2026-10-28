@@ -702,7 +702,9 @@ GOLDEN_PRS: list[GoldenPR] = [
                 SymbolRef(file_path="src/utils/dynamic_runner.ts", symbol_name="runExpression", kind="function", line=1),
             ],
             dependency_graph=[],
-            hard_rule_violations=[],
+            # What the analyzer reports for the added eval() line. The gate no
+            # longer substring-scans the diff (P1-9), so it relies on this.
+            hard_rule_violations=["Direct eval() call found in src/utils/dynamic_runner.ts:2"],
             changed_packages=[],
         ),
         expected_findings=[],

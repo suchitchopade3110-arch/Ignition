@@ -50,11 +50,11 @@ async def _run_one(pr: GoldenPR) -> EvalResult:
 
     # Runs the same node sequence the compiled graph would for a
     # non-rejected, non-retry PR, without needing a live GitHub
-    # installation (agent_1_gate's diff_fetcher is injected here instead)
-    # or a live Supabase baseline (there is deliberately no ledger entry
-    # for "acme/eval", so is_rule_regression short-circuits on "no
-    # baseline" rather than this eval run depending on persisted state).
-    gate_result = agent_1_gate(state, diff_fetcher=lambda s: pr.diff_text)
+    # installation (the gate reads the analyzer payload and state.diff_text,
+    # it never fetches) or a live Supabase baseline (there is deliberately
+    # no ledger entry for "acme/eval", so is_rule_regression short-circuits
+    # on "no baseline" rather than this eval run depending on persisted state).
+    gate_result = agent_1_gate(state)
     state = state.model_copy(update=gate_result)
     if state.hard_rule_violation:
         return score_findings(pr.expected_findings, [])

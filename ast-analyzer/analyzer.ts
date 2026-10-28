@@ -73,15 +73,62 @@ function globsFor(sourceDir: string): string[] {
  * literals, comments, and pattern-definition arrays are structurally
  * invisible to this check, since they're never parsed as call expressions.
  */
+const CHILD_PROCESS_MODULES = new Set(["child_process", "node:child_process"]);
+const DANGEROUS_CP_FNS = new Set(["exec", "execSync"]);
+
+/**
+ * Local names bound to the child_process module (namespace/default import,
+ * `const cp = require(...)`) and to its exec/execSync functions
+ * (`import { exec as run }`, `const { exec } = require(...)`). Resolving
+ * bindings instead of matching text closes the audit's P1-9 false negative
+ * (destructured require) without reintroducing substring false positives.
+ */
+function childProcessBindings(file: ReturnType<Project["getSourceFiles"]>[number]) {
+  const moduleNames = new Set<string>(["child_process"]);
+  const fnNames = new Set<string>();
+  for (const imp of file.getImportDeclarations()) {
+    if (!CHILD_PROCESS_MODULES.has(imp.getModuleSpecifierValue())) continue;
+    const ns = imp.getNamespaceImport();
+    if (ns) moduleNames.add(ns.getText());
+    const def = imp.getDefaultImport();
+    if (def) moduleNames.add(def.getText());
+    for (const n of imp.getNamedImports()) {
+      if (DANGEROUS_CP_FNS.has(n.getName())) fnNames.add(n.getAliasNode()?.getText() ?? n.getName());
+    }
+  }
+  for (const decl of file.getVariableDeclarations()) {
+    const init = decl.getInitializer();
+    if (!init || !Node.isCallExpression(init)) continue;
+    if (init.getExpression().getText() !== "require") continue;
+    const arg = init.getArguments()[0];
+    if (!arg || !Node.isStringLiteral(arg) || !CHILD_PROCESS_MODULES.has(arg.getLiteralValue())) continue;
+    const nameNode = decl.getNameNode();
+    if (Node.isIdentifier(nameNode)) moduleNames.add(nameNode.getText());
+    if (Node.isObjectBindingPattern(nameNode)) {
+      for (const el of nameNode.getElements()) {
+        const prop = el.getPropertyNameNode()?.getText() ?? el.getName();
+        if (DANGEROUS_CP_FNS.has(prop)) fnNames.add(el.getName());
+      }
+    }
+  }
+  return { moduleNames, fnNames };
+}
+
+function isRequireOfChildProcess(node: Node): boolean {
+  if (!Node.isCallExpression(node) || node.getExpression().getText() !== "require") return false;
+  const arg = node.getArguments()[0];
+  return !!arg && Node.isStringLiteral(arg) && CHILD_PROCESS_MODULES.has(arg.getLiteralValue());
+}
+
 export function detectHardRuleViolations(
   file: ReturnType<Project["getSourceFiles"]>[number],
   relPath: string,
   addedLines?: Set<number>,
 ): string[] {
   const violations: string[] = [];
-  const callExpressions = file.getDescendantsOfKind(SyntaxKind.CallExpression);
+  const { moduleNames, fnNames } = childProcessBindings(file);
 
-  for (const call of callExpressions) {
+  for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
     const line = call.getStartLineNumber();
     // P0-2: only lines this PR added can "introduce" a violation.
     if (addedLines && !addedLines.has(line)) continue;
@@ -93,25 +140,20 @@ export function detectHardRuleViolations(
       violations.push(`Direct eval() call found in ${relPath}:${line}`);
       continue;
     }
-
-    // child_process.exec(...) / cp.exec(...) — property access where the
-    // method name is "exec" and the object side plausibly refers to the
-    // child_process module (imported as child_process, cp, or via a
-    // require('child_process') call).
-    if (Node.isPropertyAccessExpression(expr) && expr.getName() === "exec") {
-      const objectText = expr.getExpression().getText();
-      const looksLikeChildProcess =
-        objectText === "child_process" ||
-        objectText === "cp" ||
-        objectText.includes("require('child_process')") ||
-        objectText.includes('require("child_process")');
-
-      if (looksLikeChildProcess) {
+    // exec(...) / run(...) where that name is bound to child_process's exec.
+    if (Node.isIdentifier(expr) && fnNames.has(expr.getText())) {
+      violations.push(`child_process.exec() call found in ${relPath}:${line}`);
+      continue;
+    }
+    // cp.exec(...) / require("child_process").execSync(...) where the
+    // object is bound to the child_process module.
+    if (Node.isPropertyAccessExpression(expr) && DANGEROUS_CP_FNS.has(expr.getName())) {
+      const obj = expr.getExpression();
+      if (moduleNames.has(obj.getText()) || isRequireOfChildProcess(obj)) {
         violations.push(`child_process.exec() call found in ${relPath}:${line}`);
       }
     }
   }
-
   return violations;
 }
 
