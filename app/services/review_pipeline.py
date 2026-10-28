@@ -36,6 +36,17 @@ review_repo = ReviewRepository()
 repo_repo = RepoRepository()
 
 
+async def _cancel_as_superseded(review_id: str, newer_sha: str) -> None:
+    """A newer push made this review's commit stale (audit P1-8): record why
+    and close the dashboard's stream; nothing is posted to the PR."""
+    review_repo.update_review(
+        review_id, {"status": "cancelled", "status_reason": f"superseded by {newer_sha}"}
+    )
+    await stream_manager.publish(
+        review_id, {"type": "review.failed", "reviewId": review_id, "status": "cancelled"}
+    )
+
+
 def parse_diff(diff_text: str) -> tuple[int, int, int, list[dict]]:
     """
     Parses unified diff text to extract changed files count,
@@ -136,6 +147,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     author = "unknown"
     branch = "main"
     gh = None
+    current_head = None
 
     try:
         from app.services.github_client import GitHubClient
@@ -144,8 +156,17 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         title = pr.title
         author = pr.user.login
         branch = pr.head.ref
+        current_head = pr.head.sha
     except Exception as e:
         logger.exception("Failed to fetch PR info from GitHub API: %s", e)
+
+    # A newer push already superseded this commit (audit P1-8): don't
+    # analyse a stale SHA. The newer push has its own job.
+    if current_head and current_head != event.pull_request.head_sha:
+        logger.info("Review superseded before analysis", extra={"review_id": review_id})
+        await _cancel_as_superseded(review_id, current_head)
+        _record_terminal_metric("cancelled")
+        return
 
     # Fetch Unified Diff
     diff_text = ""
@@ -499,6 +520,11 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         )
 
                     elif node_name == "finalize_and_post":
+                        superseded_by = (node_output or {}).get("superseded_by")
+                        if superseded_by:
+                            await _cancel_as_superseded(review_id, superseded_by)
+                            _record_terminal_metric("cancelled")
+                            continue
                         review_repo.update_review(review_id, {"status": "completed"})
 
                         # Update Repository baseline stats

@@ -46,6 +46,9 @@ class Settings(BaseModel):
     # GitHub OAuth (Sign in with GitHub) — separate credential pair from the
     # App's private key above. Used only for user login/session, never for
     # server-to-server installation calls.
+    # The App's URL slug; its comments are authored by "<slug>[bot]". Used to
+    # find Ignition's own sticky comment (audit P1-8). Blank = ask GitHub.
+    github_app_slug: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
 
@@ -161,6 +164,7 @@ class Settings(BaseModel):
             github_webhook_secret_previous=kwargs.get(
                 "github_webhook_secret_previous", os.getenv("GITHUB_WEBHOOK_SECRET_PREVIOUS", "")
             ),
+            github_app_slug=kwargs.get("github_app_slug", os.getenv("GITHUB_APP_SLUG", "")),
             github_client_id=kwargs.get("github_client_id", os.getenv("GITHUB_CLIENT_ID", "")),
             github_client_secret=kwargs.get("github_client_secret", os.getenv("GITHUB_CLIENT_SECRET", "")),
             session_cookie_name=kwargs.get("session_cookie_name", os.getenv("SESSION_COOKIE_NAME", "ignition_session")),

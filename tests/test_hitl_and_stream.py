@@ -66,7 +66,8 @@ def fake_review(monkeypatch):
         if not row:
             return None
         return {k: row.get(k) for k in
-                ("repo_full_name", "installation_id", "pr_number", "final_comment_markdown", "correlation_id")}
+                ("repo_full_name", "installation_id", "pr_number", "final_comment_markdown", "correlation_id",
+                 "commit_sha")}
 
     def update_review(review_id, updates):
         rows.setdefault(review_id, {}).update(updates)
@@ -81,7 +82,7 @@ def fake_review(monkeypatch):
 @pytest.mark.asyncio
 async def test_approve_hitl_posts_comment_and_publishes_events(override_auth, fake_review):
     mock_gh_instance = MagicMock()
-    mock_gh_instance.post_review_comment.return_value = {
+    mock_gh_instance.upsert_sticky_comment.return_value = {
         "id": 123, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-123",
     }
     with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance), \
@@ -95,7 +96,7 @@ async def test_approve_hitl_posts_comment_and_publishes_events(override_auth, fa
     assert body["success"] is True
     assert body["github_comment_url"].endswith("issuecomment-123")
     assert fake_review["review-1"]["status"] == "completed"
-    mock_gh_instance.post_review_comment.assert_called_once()
+    mock_gh_instance.upsert_sticky_comment.assert_called_once()
     published_types = [call.args[1]["type"] for call in mock_publish.await_args_list]
     assert "hitl.approved" in published_types
     assert "review.completed" in published_types
@@ -104,7 +105,7 @@ async def test_approve_hitl_posts_comment_and_publishes_events(override_auth, fa
 @pytest.mark.asyncio
 async def test_approve_hitl_records_outcome_per_distinct_finding_pattern(override_auth, fake_review):
     mock_gh_instance = MagicMock()
-    mock_gh_instance.post_review_comment.return_value = {
+    mock_gh_instance.upsert_sticky_comment.return_value = {
         "id": 123, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-123",
     }
     mock_ledger = MagicMock()
@@ -134,7 +135,7 @@ async def test_approve_hitl_surfaces_github_post_failure_as_502(override_auth, f
     """A failed GitHub post must not be swallowed into a false success —
     this is the exact failure mode app/main.py's own docstring calls out."""
     mock_gh_instance = MagicMock()
-    mock_gh_instance.post_review_comment.side_effect = RuntimeError("GitHub API unreachable")
+    mock_gh_instance.upsert_sticky_comment.side_effect = RuntimeError("GitHub API unreachable")
     with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance):
         transport = httpx.ASGITransport(app=main_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -220,3 +221,21 @@ async def test_stream_endpoint_requires_auth():
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/api/reviews/review-1/stream")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_approving_a_superseded_review_posts_nothing(override_auth, fake_review):
+    """Audit P1-8: the PR moved past this review's commit; approving it would
+    overwrite the newer review's sticky comment."""
+    fake_review["review-1"]["commit_sha"] = "a" * 40
+    mock_gh_instance = MagicMock()
+    mock_gh_instance.get_pr_head_sha.return_value = "b" * 40
+    with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance), \
+         patch.object(stream_manager, "publish", new=AsyncMock()):
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/hitl/review-1/approve")
+    assert response.status_code == 409
+    mock_gh_instance.upsert_sticky_comment.assert_not_called()
+    assert fake_review["review-1"]["status"] == "cancelled"
+    assert fake_review["review-1"]["status_reason"] == f"superseded by {'b' * 40}"

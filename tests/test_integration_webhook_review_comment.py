@@ -181,7 +181,7 @@ def _fake_ast_payload() -> ASTAnalyzerPayload:
 
 async def _fake_llm_complete(self, prompt, json_mode=True, agent_name="unknown"):
     """No findings, clean pass — the simplest deterministic path through
-    the graph to finalize_and_post -> GitHubClient.post_review_comment,
+    the graph to finalize_and_post -> GitHubClient.upsert_sticky_comment,
     which is the actual thing this test verifies gets called."""
     if not json_mode:
         return "Clean pass, no notable issues."
@@ -218,9 +218,13 @@ def mock_externals():
          patch.object(LedgerRepository, "get_baseline", return_value=None), \
          patch("app.services.github_client.GitHubClient") as mock_gh_class:
         mock_gh_instance = MagicMock()
-        mock_gh_instance.post_review_comment.return_value = {
+        mock_gh_instance.upsert_sticky_comment.return_value = {
             "id": 555111, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-555111",
         }
+        mock_gh_instance.bot_login = "ignition-review[bot]"
+        # The PR's current head is the event's head (no newer push) unless a
+        # test says otherwise (audit P1-8 superseded-SHA checks).
+        mock_gh_instance.get_pr_head_sha.return_value = "deadbeef00000000000000000000000000000000"
         # get_pr_diff and the raw PyGithub PR object both need to return
         # real strings, not an unconfigured MagicMock — ReviewState.diff_text
         # is a real pydantic string field, and pydantic correctly rejects a
@@ -233,6 +237,7 @@ def mock_externals():
         fake_pr.title = "Test PR"
         fake_pr.user.login = "test-author"
         fake_pr.head.ref = "test-branch"
+        fake_pr.head.sha = "deadbeef00000000000000000000000000000000"
         mock_gh_instance._client.get_repo.return_value.get_pull.return_value = fake_pr
         mock_gh_class.return_value = mock_gh_instance
         yield {"github_client": mock_gh_class, "github_instance": mock_gh_instance}
@@ -300,8 +305,8 @@ async def test_webhook_to_review_to_github_comment(fake_repos, mock_externals, m
     # 3. GitHub comment: the actual thing this whole flow exists to
     # produce. Assert it was called with the right repo/PR, not just that
     # *something* was called.
-    mock_externals["github_instance"].post_review_comment.assert_called_once()
-    call_kwargs = mock_externals["github_instance"].post_review_comment.call_args.kwargs
+    mock_externals["github_instance"].upsert_sticky_comment.assert_called_once()
+    call_kwargs = mock_externals["github_instance"].upsert_sticky_comment.call_args.kwargs
     assert call_kwargs["repo_full_name"] == "acme/widgets"
     assert call_kwargs["pr_number"] == 7
 
@@ -387,3 +392,41 @@ async def test_pipeline_passes_installation_token_to_analyzer(fake_repos, mock_e
     event_payload, review_id, correlation_id = mock_arq.enqueue_job.call_args.args[1:4]
     await run_review_job({}, event_payload, review_id, correlation_id)
     assert ASTClient.analyze_git.await_args.kwargs["auth_token"] == "ghs_installation"
+
+
+async def _enqueue_one(mock_arq, delivery):
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/webhooks/github", content=body, headers={
+            "Content-Type": "application/json", "X-Hub-Signature-256": _sign(body), "X-GitHub-Delivery": delivery})
+    return mock_arq.enqueue_job.call_args.args[1:4]
+
+
+@pytest.mark.asyncio
+async def test_superseded_head_is_cancelled_before_analysis(fake_repos, mock_externals, mock_arq):
+    """Audit P1-8: a push landed after this webhook — don't analyse a stale SHA."""
+    fake_review_repo, _ = fake_repos
+    gh = mock_externals["github_instance"]
+    gh._client.get_repo.return_value.get_pull.return_value.head.sha = "f" * 40
+    event_payload, review_id, correlation_id = await _enqueue_one(mock_arq, "superseded-1")
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    row = fake_review_repo.get_review(review_id)
+    assert row["status"] == "cancelled"
+    assert row["status_reason"] == f"superseded by {'f' * 40}"
+    ASTClient.analyze_git.assert_not_awaited()
+    gh.upsert_sticky_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_superseded_head_is_cancelled_before_posting(fake_repos, mock_externals, mock_arq):
+    """Audit P1-8: the head moved while this review ran — don't post stale results."""
+    fake_review_repo, _ = fake_repos
+    gh = mock_externals["github_instance"]
+    gh.get_pr_head_sha.return_value = "f" * 40  # checked again just before posting
+    event_payload, review_id, correlation_id = await _enqueue_one(mock_arq, "superseded-2")
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    row = fake_review_repo.get_review(review_id)
+    assert row["status"] == "cancelled"
+    assert row["status_reason"] == f"superseded by {'f' * 40}"
+    gh.upsert_sticky_comment.assert_not_called()

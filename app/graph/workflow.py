@@ -34,13 +34,26 @@ def pause_for_human_approval(state: ReviewState) -> dict:
 def finalize_and_post(state: ReviewState) -> dict:
     from app.services.github_client import GitHubClient
 
+    gh = GitHubClient(installation_id=state.installation_id)
+    # Checked again right before posting (audit P1-8): a push during the
+    # review makes these results stale, and the sticky comment would
+    # overwrite the newer review's.
+    if state.head_sha:
+        current_head = gh.get_pr_head_sha(state.repo_full_name, state.pr_number)
+        if current_head and current_head != state.head_sha:
+            logger.info("PR head moved during the review; not posting", extra={
+                "repo_full_name": state.repo_full_name, "pr_number": state.pr_number,
+            })
+            return {"superseded_by": current_head}
+
     logger.info("Posting final review comment to GitHub", extra={
         "repo_full_name": state.repo_full_name, "pr_number": state.pr_number,
     })
-    GitHubClient(installation_id=state.installation_id).post_review_comment(
+    gh.upsert_sticky_comment(
         repo_full_name=state.repo_full_name,
         pr_number=state.pr_number,
-        markdown_body=state.final_comment_markdown or "No findings.",
+        body=state.final_comment_markdown or "No findings.",
+        bot_login=gh.bot_login,
     )
     return {}
 

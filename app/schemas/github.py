@@ -34,6 +34,8 @@ class PullRequestPayload(BaseModel):
     # it from. Optional so payloads that genuinely omit it (hand-crafted
     # test fixtures, mainly) don't fail validation.
     user: PullRequestUser | None = None
+    # Drafts are skipped until they're marked ready for review (audit P1-8).
+    draft: bool = False
 
     @property
     def head_sha(self):

@@ -279,10 +279,15 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         metrics.webhook_events_total.labels(event_type=event_type, outcome="rejected").inc()
         raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {exc}")
 
-    if event.action not in {"opened", "synchronize", "reopened"}:
+    if event.action not in {"opened", "synchronize", "reopened", "ready_for_review"}:
         logger.info("Webhook action ignored", extra={"action": event.action})
         metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
         return {"status": "ignored", "action": event.action}
+    if event.pull_request.draft:
+        # Reviewed once it's marked ready (the ready_for_review action above).
+        logger.info("Draft PR ignored", extra={"pr_number": event.pull_request.number})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
+        return {"status": "ignored", "reason": "draft"}
 
     review_id = str(uuid.uuid4())
 
@@ -352,7 +357,12 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # unlabeled key nobody reading run_review_job's signature would think
     # to look for.
     pool = await get_arq_pool()
-    job = await pool.enqueue_job("run_review_job", event.model_dump(mode="json"), review_id, correlation_id)
+    # One job per (repo, PR, head SHA) (audit P1-8): Arq refuses a second job
+    # with the same id, so a redelivered event can't run the same SHA twice.
+    job = await pool.enqueue_job(
+        "run_review_job", event.model_dump(mode="json"), review_id, correlation_id,
+        _job_id=f"review:{event.repository.full_name}:{event.pull_request.number}:{event.pull_request.head_sha}",
+    )
     review_repo.update_review(review_id, {"job_id": job.job_id if job else None})
     logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
     metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
@@ -509,23 +519,36 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     if gh_context.get("correlation_id"):
         set_correlation_id(gh_context["correlation_id"])
 
+    from app.services.github_client import GitHubClient
+
+    try:
+        gh = GitHubClient(installation_id=gh_context["installation_id"])
+        current_head = gh.get_pr_head_sha(gh_context["repo_full_name"], gh_context["pr_number"])
+    except Exception as e:
+        logger.exception("Failed to read the PR's current head from GitHub: %s", e)
+        raise HTTPException(status_code=502, detail="Could not reach GitHub to post the approval")
+    # Same rule as the pipeline's "check again before posting" (audit P1-8):
+    # the comment is sticky, so approving a review of an older commit would
+    # overwrite the newer review's comment.
+    if gh_context.get("commit_sha") and current_head and current_head != gh_context["commit_sha"]:
+        review_repo.update_review(review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
+        raise HTTPException(status_code=409, detail=f"This review is superseded by {current_head}; nothing was posted")
+
     review_repo.update_review(review_id, {"status": "completed"})
     _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
 
     # Post final comment to GitHub. A failure here is surfaced to the
     # caller (502), not swallowed — silently returning success while the
     # comment never posted is exactly the failure mode this fix closes.
-    from app.services.github_client import GitHubClient
-
     try:
         logger.info("Posting HITL-approved comment to GitHub", extra={
             "review_id": review_id, "repo_full_name": gh_context["repo_full_name"], "pr_number": gh_context["pr_number"],
         })
-        gh = GitHubClient(installation_id=gh_context["installation_id"])
-        github_response = gh.post_review_comment(
+        github_response = gh.upsert_sticky_comment(
             repo_full_name=gh_context["repo_full_name"],
             pr_number=gh_context["pr_number"],
-            markdown_body=gh_context.get("final_comment_markdown") or "Approved by human.",
+            body=gh_context.get("final_comment_markdown") or "Approved by human.",
+            bot_login=gh.bot_login,
         )
     except Exception as e:
         logger.exception("Failed to post human approval comment to GitHub: %s", e)

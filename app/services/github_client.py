@@ -18,6 +18,7 @@ one of them, even multiple times within the same review run.
 """
 import logging
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from github import Auth, GithubIntegration
 
@@ -27,6 +28,21 @@ from app.services.redis_client import get_sync_redis
 logger = logging.getLogger(__name__)
 
 _TOKEN_REFRESH_MARGIN_SECONDS = 300  # refresh if less than 5 min would remain
+
+# First line of Ignition's one review comment per PR (audit P1-8). Only a
+# comment that starts with this AND is authored by the App's bot user is
+# ever edited, so nobody can make Ignition overwrite their own comment.
+STICKY_MARKER = "<!-- ignition:review -->"
+
+
+@lru_cache
+def _app_slug() -> str:
+    settings = get_settings()
+    if settings.github_app_slug:
+        return settings.github_app_slug
+    # GET /app with the App's JWT; once per process.
+    auth = Auth.AppAuth(app_id=settings.github_app_id, private_key=settings.github_private_key)
+    return GithubIntegration(auth=auth).get_app().slug
 
 
 def _cache_key(installation_id: int) -> str:
@@ -78,6 +94,37 @@ class GitHubClient:
         permissions on this installation's repos. Handed to the AST analyzer
         so it can clone private repos (audit P0-8). Never log it."""
         return self._token
+
+    @property
+    def bot_login(self) -> str:
+        """The login GitHub shows on comments this App posts."""
+        return f"{_app_slug()}[bot]"
+
+    def get_pr_head_sha(self, repo_full_name: str, pr_number: int) -> str:
+        """The PR's current head commit — compared against the SHA a review
+        was started for, to skip superseded reviews (audit P1-8)."""
+        return self._client.get_repo(repo_full_name).get_pull(pr_number).head.sha
+
+    def upsert_sticky_comment(self, repo_full_name: str, pr_number: int, body: str, bot_login: str) -> dict:
+        """One Ignition comment per PR (audit P1-8): edit ours if it exists,
+        create it otherwise. A retried or repeated post is an edit, never a
+        duplicate."""
+        issue = self._client.get_repo(repo_full_name).get_issue(pr_number)
+        body = f"{STICKY_MARKER}\n{body}"
+        for comment in issue.get_comments():
+            if comment.user.login == bot_login and (comment.body or "").startswith(STICKY_MARKER):
+                comment.edit(body)
+                logger.info("GitHub review comment updated", extra={
+                    "repo_full_name": repo_full_name, "pr_number": pr_number,
+                    "comment_id": comment.raw_data.get("id"), "comment_url": comment.raw_data.get("html_url"),
+                })
+                return comment.raw_data
+        created = issue.create_comment(body)
+        logger.info("GitHub review comment posted", extra={
+            "repo_full_name": repo_full_name, "pr_number": pr_number,
+            "comment_id": created.raw_data.get("id"), "comment_url": created.raw_data.get("html_url"),
+        })
+        return created.raw_data
 
     @staticmethod
     def _build_github(token: str):

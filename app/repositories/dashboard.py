@@ -61,7 +61,7 @@ class ReviewRepository:
         """
         res = (
             self._db.table(self.TABLE)
-            .select("repo_full_name, installation_id, pr_number, final_comment_markdown, correlation_id")
+            .select("repo_full_name, installation_id, pr_number, final_comment_markdown, correlation_id, commit_sha")
             .eq("id", review_id)
             .execute()
         )

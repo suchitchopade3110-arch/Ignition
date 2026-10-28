@@ -97,6 +97,9 @@ class ReviewState(BaseModel):
     repo_full_name: str
     pr_number: int
     installation_id: int
+    # The commit this review was started for; compared with the PR's live
+    # head before posting so a superseded review never posts (audit P1-8).
+    head_sha: str = ""
     diff_text: str = ""
     ast_payload: ASTAnalyzerPayload
 
@@ -136,6 +139,8 @@ class ReviewState(BaseModel):
     # Terminal
     final_comment_markdown: str | None = None
     review_incomplete: bool = False
+    # Set by finalize_and_post when the PR's head moved during the review.
+    superseded_by: str | None = None
 
     # Set by agent_4_autofix — informational, not used in routing decisions
     autofix_posted: int = 0
@@ -147,5 +152,6 @@ class ReviewState(BaseModel):
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
             installation_id=event.installation.id,
+            head_sha=event.pull_request.head_sha,
             ast_payload=ast_payload,
         )
