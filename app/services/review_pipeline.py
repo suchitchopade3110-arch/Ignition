@@ -16,7 +16,7 @@ import logging
 import os
 import socket
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.schemas.github import PullRequestWebhook
@@ -748,7 +748,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                         await asyncio.to_thread(repo_repo.update_repo_stats,
                             repo_full_name=event.repository.full_name,
                             acs_score=final_acs,
-                            last_review_at=datetime.utcnow().isoformat() + "Z",
+                            last_review_at=datetime.now(timezone.utc).isoformat(),
                         )
 
                         await stream_manager.publish(

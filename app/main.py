@@ -517,7 +517,7 @@ def get_hitl_pending(repos: frozenset[str] = Depends(get_accessible_repos)):
     # truth instead of a separately-maintained running count that could
     # drift from it.
     metrics.hitl_pending_gauge.set(len(pending))
-    now_str = datetime.utcnow().isoformat() + "Z"
+    now_str = datetime.now(timezone.utc).isoformat()
     return [HitlItem(**{**r, "waiting_since": r.get("created_at", now_str)}) for r in pending]
 
 

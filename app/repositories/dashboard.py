@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import collections
@@ -14,7 +14,7 @@ class ReviewRepository:
         self._db = get_supabase()
 
     def create_review(self, review_id: str, repo_full_name: str, pr_number: int, title: str, author: str, branch: str, commit_sha: str, installation_id: int | None = None, correlation_id: str | None = None) -> dict:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat()
         row = {
             "id": review_id,
             "repo_full_name": repo_full_name,
@@ -92,7 +92,7 @@ class ReviewRepository:
     def update_review(self, review_id: str, updates: dict) -> dict:
         # If status changes to completed/failed, set completed_at
         if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting"):
-            updates["completed_at"] = datetime.utcnow().isoformat() + "Z"
+            updates["completed_at"] = datetime.now(timezone.utc).isoformat()
         
         # Calculate duration if completed_at is set
         if "completed_at" in updates or ("status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting")):
@@ -103,8 +103,9 @@ class ReviewRepository:
                     try:
                         # strip Z or offset
                         created_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-                        completed_dt = datetime.utcnow()
-                        delta = completed_dt - created_dt.replace(tzinfo=None)
+                        if created_dt.tzinfo is None:  # a naive stamp is UTC
+                            created_dt = created_dt.replace(tzinfo=timezone.utc)
+                        delta = datetime.now(timezone.utc) - created_dt
                         seconds = int(delta.total_seconds())
                         if seconds < 60:
                             updates["duration"] = f"{seconds}s"
@@ -252,9 +253,9 @@ class ReviewRepository:
         a repo that just started using Ignition) — a fabricated number here
         is exactly the thing this field was added to stop doing.
         """
-        now = datetime.utcnow()
-        week_ago = (now - timedelta(days=7)).isoformat() + "Z"
-        two_weeks_ago = (now - timedelta(days=14)).isoformat() + "Z"
+        now = datetime.now(timezone.utc)
+        week_ago = (now - timedelta(days=7)).isoformat()
+        two_weeks_ago = (now - timedelta(days=14)).isoformat()
 
         recent_res = (
             self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names)
