@@ -9,6 +9,7 @@ Responsibilities:
   - Serve all REST endpoints expected by the Next.js frontend
 """
 import asyncio
+import hmac
 import json
 import logging
 import time
@@ -99,7 +100,7 @@ def _rate_limit_exceeded_handler_with_metric(request: Request, exc: RateLimitExc
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler_with_metric)
 app.add_middleware(SlowAPIMiddleware)
 # Constructed once here, at module import (same lifecycle as ast_client/
-# graph in app/services/review_pipeline.py) — /healthz's LLM reachability
+# graph in app/services/review_pipeline.py) — /readyz's LLM reachability
 # check (app/services/health_checks.py) is this process's only caller, but
 # it should still be the one shared instance, not a fresh AsyncGroq per
 # health-check poll.
@@ -757,17 +758,45 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
     )
 
 
-@app.get("/healthz")
-async def healthz(response: Response):
+@app.get("/livez")
+async def livez():
+    """Render's health check (I-5): is this process serving requests. No
+    dependency calls, so a slow Groq or Supabase never gets the web service
+    restarted and a poll costs nothing."""
+    return {"status": "ok"}
+
+
+# The deep check's last result, reused for 15 s so a poller can't turn it
+# into a stream of Groq/Supabase calls (I-5).
+_READYZ_CACHE_SECONDS = 15.0
+_readyz_cache: dict = {}
+
+
+@app.get("/readyz")
+async def readyz(request: Request, response: Response):
     """
-    Real dependency reachability, not a static ping — see
-    app/services/health_checks.py. Intentionally NOT behind the Phase 1
-    auth dependency: infra tooling (load balancers, uptime monitors,
-    container orchestrators) needs to reach this without a session, which
-    is the standard shape for a health-check endpoint and matches this
-    route's existing placement (outside api_router already).
+    Real dependency reachability (Supabase, the analyzer, the LLM provider,
+    Redis — app/services/health_checks.py), for operators and monitors, not
+    the platform probe. Requires `Authorization: Bearer $READYZ_TOKEN`;
+    without a configured token it is 404 in production and open locally.
+    Errors name only the exception class.
     """
-    body, all_healthy = await run_health_checks()
+    expected = settings.readyz_token
+    if not expected:
+        if settings.app_env == "production":
+            raise HTTPException(status_code=404, detail="Not Found")
+    else:
+        supplied = request.headers.get("authorization", "")
+        if not hmac.compare_digest(supplied.encode(), f"Bearer {expected}".encode()):
+            raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    now = time.monotonic()
+    cached = _readyz_cache.get("result")
+    if cached and now - cached[0] < _READYZ_CACHE_SECONDS:
+        body, all_healthy = cached[1], cached[2]
+    else:
+        body, all_healthy = await run_health_checks()
+        _readyz_cache["result"] = (now, body, all_healthy)
     if not all_healthy:
         response.status_code = 503
     return body

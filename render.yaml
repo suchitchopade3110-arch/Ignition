@@ -51,7 +51,8 @@ services:
     dockerContext: .
     dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
     plan: 0.5c-512mb
-    healthCheckPath: /healthz
+    # Dependency-free liveness (I-5); the deep check is /readyz.
+    healthCheckPath: /livez
     envVars:
       - key: APP_ENV
         value: production
@@ -68,6 +69,9 @@ services:
           property: hostport
       - key: METRICS_ENABLED
         value: "true"
+      # Bearer token for GET /readyz (I-5). Any long random string.
+      - key: READYZ_TOKEN
+        sync: false
       # Same-origin topology (audit P0-5): the browser reaches this service
       # only through the frontend's /api and /auth rewrites, so cookies are
       # first-party and Lax is correct again.

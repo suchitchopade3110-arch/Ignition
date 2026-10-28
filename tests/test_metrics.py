@@ -37,10 +37,10 @@ async def test_metrics_endpoint_reflects_recorded_requests():
     /metrics is scraped — labeled by route template, not raw path."""
     transport = httpx.ASGITransport(app=main_module.app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        await client.get("/healthz")  # any cheap, unauthenticated route
+        await client.get("/livez")  # any cheap, unauthenticated route (/healthz became /livez, I-5)
         response = await client.get("/metrics")
 
-    assert 'path="/healthz"' in response.text
+    assert 'path="/livez"' in response.text
 
 
 @pytest.mark.asyncio

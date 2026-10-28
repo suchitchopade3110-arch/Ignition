@@ -105,7 +105,7 @@ def get_llm_client() -> "LLMClient":
     existing convention for "one shared instance per process" is a cached
     module-level getter, not FastAPI Depends() (there's no per-route
     handler that calls the LLM directly to inject into — only graph nodes,
-    which take `state: ReviewState`, and the /healthz check).
+    which take `state: ReviewState`, and the /readyz check).
 
     AsyncGroq wraps an httpx.AsyncClient internally, which httpx documents
     as safe for concurrent use across many in-flight coroutines — that's

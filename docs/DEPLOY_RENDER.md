@@ -110,9 +110,12 @@ update:
 
 ## 5. Verify
 
-- `GET https://<your-backend-host>/healthz` — checks real reachability of
-  Supabase, the AST analyzer, the LLM provider, and Redis, not just "is the
-  process up." All green means the secrets from step 2 are correct.
+- `GET https://<your-backend-host>/livez` → `{"status":"ok"}` — Render's
+  health check (no dependencies, I-5).
+- `curl -H "Authorization: Bearer $READYZ_TOKEN" https://<your-backend-host>/readyz`
+  — checks real reachability of Supabase, the AST analyzer, the LLM
+  provider, and Redis (cached 15 s). All green means the secrets from step 2
+  are correct. Without the token it answers 401.
 - `GET https://<your-backend-host>/metrics` — Prometheus scrape target, if
   you're wiring up monitoring.
 - Visit the frontend, log in via GitHub, install the App on a test repo,
