@@ -40,6 +40,8 @@ interface DependencyEdge {
 interface PackageRef {
   name: string;
   version: string;
+  /** The declared spec at the base commit; absent for a new dependency (P1-11). */
+  previous_version?: string;
 }
 
 export interface ASTAnalyzerPayload {
@@ -481,15 +483,20 @@ async function getPackageJsonAtRef(
 export function diffPackages(
   base: Record<string, string> | null,
   head: Record<string, string> | null
-): { name: string; version: string }[] {
+): PackageRef[] {
   if (!head) return [];
-  const changed: { name: string; version: string }[] = [];
+  const changed: PackageRef[] = [];
 
   for (const [name, version] of Object.entries(head)) {
     const baseVersion = base?.[name];
     if (baseVersion !== version) {
       const v = normalizeVersion(version);
-      if (v) changed.push(v.alias ? { name: v.alias, version: v.version } : { name, version: v.version });
+      if (!v) continue;
+      const ref: PackageRef = v.alias ? { name: v.alias, version: v.version } : { name, version: v.version };
+      // A bump, not a new dependency (audit P1-11): Agent 2C only sends NEW
+      // packages to the model. Omitted entirely for a new package.
+      if (baseVersion !== undefined) ref.previous_version = baseVersion;
+      changed.push(ref);
     }
   }
 

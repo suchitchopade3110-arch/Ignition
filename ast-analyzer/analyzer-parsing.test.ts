@@ -172,7 +172,9 @@ describe("diffPackages", () => {
 
   test("reports a version bump as changed", () => {
     const changed = diffPackages({ lodash: "^4.17.20" }, { lodash: "^4.17.21" });
-    expect(changed).toEqual([{ name: "lodash", version: "4.17.21" }]);
+    // Since audit P1-11 a bump also carries the base spec, so Agent 2C can
+    // tell it apart from a new dependency.
+    expect(changed).toEqual([{ name: "lodash", version: "4.17.21", previous_version: "^4.17.20" }]);
   });
 
   test("does not report an unchanged package", () => {

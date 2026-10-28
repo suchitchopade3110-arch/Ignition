@@ -35,3 +35,14 @@ describe("diffPackages with normalized versions", () => {
     ]);
   });
 });
+
+describe("diffPackages marks version bumps (P1-11)", () => {
+  test("a bumped package carries its previous version; a new one has none", () => {
+    const changed = diffPackages({ react: "^18.2.0", left: "1.0.0" }, { react: "^19.0.0", left: "1.0.0", fresh: "1.0.0" });
+    expect(changed).toEqual([
+      { name: "react", version: "19.0.0", previous_version: "^18.2.0" },
+      { name: "fresh", version: "1.0.0" },
+    ]);
+    expect("previous_version" in changed[1]).toBe(false);
+  });
+});

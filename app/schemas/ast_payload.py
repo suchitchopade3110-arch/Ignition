@@ -25,6 +25,10 @@ class DependencyEdge(BaseModel):
 class PackageRef(BaseModel):
     name: str
     version: str
+    # The declared spec at the base commit when this is a version bump;
+    # None for a dependency the PR adds (audit P1-11: only new packages go
+    # to Agent 2C's model). Mirrors PackageRef in ast-analyzer/analyzer.ts.
+    previous_version: str | None = None
 
 
 class ASTAnalyzerPayload(BaseModel):

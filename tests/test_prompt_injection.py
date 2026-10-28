@@ -102,9 +102,10 @@ async def test_2b_fences_diff_symbols_and_past_incidents(fixed_nonce):
 async def test_2c_fences_the_package_name(fixed_nonce):
     llm = CapturingLLM()
     with patch.object(a2c, "get_llm_client", return_value=llm):
-        await a2c._phase2_semantic_slopsquat_check(f"left-pad-{NONCE}", 3.0)
+        # One batched prompt for every prefiltered package since P1-11.
+        await a2c._phase2_semantic_slopsquat_check([(f"left-pad-{NONCE}", 3.0)])
     prompt = llm.prompts[0]
-    _assert_fenced(prompt, "package_name", "left-pad-")
+    _assert_fenced(prompt, "packages", "left-pad-")
     _assert_told_it_is_data(prompt)
 
 
