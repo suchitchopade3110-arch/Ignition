@@ -3,6 +3,8 @@
 You are reviewing a pull request for architectural and structural issues only.
 Do NOT comment on security or performance — other agents own those.
 
+{untrusted_notice}
+
 The actual code changes for this PR (unified diff format):
 {diff}
 

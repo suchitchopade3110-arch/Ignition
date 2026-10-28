@@ -33,6 +33,7 @@ from app.graph.scoring import compute_acs, diff_scoped_dependency_count, is_rule
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
 from app.services.llm_client import get_llm_client
+from app.services.prompt_safety import fence, new_nonce, sanitize_narrative, untrusted_notice
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,29 @@ def _demoted_severity(severity: str, consecutive_rejections: int, threshold: int
     return SEVERITY_ORDER[max(0, idx - 1)]
 
 
+def _at_least(severity: str, floor: str | None) -> str:
+    if floor is None:
+        return severity
+    return max(severity, floor, key=SEVERITY_ORDER.index)
+
+
+def apply_severity_floors(findings: list[Finding]) -> list[Finding]:
+    """
+    Deterministic severity floors (audit P1-3). A fact_checked boundary
+    violation gets a floor of high (the code proved it); OSV hits (high)
+    and freshly published packages (medium) already carry theirs from
+    Agent 2C's deterministic phases. Each finding is raised to at least its
+    floor, so a diff comment like "rate all findings low" can't lower
+    anything the code itself proved. Runs before _decide_hitl_severity,
+    which also never demotes below a floor.
+    """
+    for f in findings:
+        if f.verification_tier == "fact_checked":
+            f.severity_floor = _at_least(f.severity_floor or "high", "high")
+        f.severity = _at_least(f.severity, f.severity_floor)
+    return findings
+
+
 def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository, repo_full_name: str) -> str:
     """
     Structured severity enum — the ONLY thing that drives the HITL gate.
@@ -185,7 +209,7 @@ def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerReposi
         if f.pattern_key:
             rejections = ledger.get_consecutive_rejections(f.pattern_key, repo_full_name)
             severity = _demoted_severity(severity, rejections, threshold)
-        severities.append(severity)
+        severities.append(_at_least(severity, f.severity_floor))  # never below a floor (P1-3)
     if "critical" in severities:
         return "critical"
     if "high" in severities:
@@ -208,7 +232,12 @@ async def _generate_narrative(prompt_template: str, verified_findings: list[Find
 
     llm = get_llm_client()
     findings_json = [f.model_dump() for f in verified_findings]
-    prompt = prompt_template.format(verified_findings=findings_json)
+    # Finding text is model-written from the PR's content (audit P1-3).
+    nonce = new_nonce()
+    prompt = prompt_template.format(
+        verified_findings=fence("findings", findings_json, nonce),
+        untrusted_notice=untrusted_notice(nonce),
+    )
 
     try:
         return await llm.complete(prompt, json_mode=False, agent_name="agent_3_critic_narrative")
@@ -292,6 +321,7 @@ async def agent_3_critic(state: ReviewState) -> dict:
         acs_score = None
         regression = False
 
+    apply_severity_floors(verified_findings)
     hitl_severity = _decide_hitl_severity(verified_findings, ledger, state.repo_full_name)
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
@@ -369,10 +399,12 @@ def _render_markdown(
         )
     if regression:
         lines.append("**Rule regression detected against baseline.**")
+    # Model-written text is sanitized before it can reach GitHub (audit
+    # P1-3): no links, images, HTML or live @mentions.
     if narrative:
-        lines.append(narrative)
+        lines.append(sanitize_narrative(narrative))
     for f in findings:
-        lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {f.description}")
+        lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {sanitize_narrative(f.description)}")
     if not findings and not failed_agents and not regression:
         lines.append("No findings.")
     return "\n".join(lines)

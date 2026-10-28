@@ -53,6 +53,11 @@ class Finding(BaseModel):
     # review) so a pattern humans keep rejecting can be demoted; see
     # LedgerRepository.record_hitl_outcome / get_consecutive_rejections.
     pattern_key: str | None = None
+    # Lowest severity this finding may ever show or count as (audit P1-3).
+    # Set only by deterministic code (an OSV hit, a fresh npm publish, a
+    # fact_checked boundary violation), never from model output, so an
+    # instruction hidden in the diff can't talk a proven finding down.
+    severity_floor: Severity | None = None
 
 
 class ClearAgentFindings(list):

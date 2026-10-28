@@ -11,6 +11,7 @@ from pathlib import Path
 from app.graph.state import ReviewState, Finding
 from app.services.llm_client import get_llm_client
 from app.services.finding_parser import parse_findings_json
+from app.services.prompt_safety import fence, new_nonce, untrusted_notice
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +50,15 @@ async def agent_2a_struct(state: ReviewState) -> dict:
 
     dependency_graph_json = [edge.model_dump() for edge in state.ast_payload.dependency_graph]
     symbols_json = [symbol.model_dump() for symbol in state.ast_payload.symbols]
+    # Everything from the PR is fenced with a per-call nonce (audit P1-3).
+    nonce = new_nonce()
+    rejected_claims = _format_rejected_claims(state)
     prompt = prompt_template.format(
-        dependency_graph=dependency_graph_json,
-        symbols=symbols_json,
-        diff=state.diff_text,
-        rejected_claims=_format_rejected_claims(state),
+        untrusted_notice=untrusted_notice(nonce),
+        dependency_graph=fence("dependency_graph", dependency_graph_json, nonce),
+        symbols=fence("symbols", symbols_json, nonce),
+        diff=fence("diff", state.diff_text, nonce),
+        rejected_claims=fence("rejected_claims", rejected_claims, nonce) if rejected_claims else "",
     )
 
     try:

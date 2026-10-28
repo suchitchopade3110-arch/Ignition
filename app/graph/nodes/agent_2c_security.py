@@ -23,6 +23,7 @@ import httpx
 from app.config import get_settings
 from app.graph.state import ReviewState, Finding
 from app.services.llm_client import get_llm_client
+from app.services.prompt_safety import fence, new_nonce, untrusted_notice
 from app.services.finding_parser import parse_findings_json
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ async def _phase1_deterministic_registry_check(
                 file_path="package.json",
                 description=f"Known vulnerability in {package_name}@{version}",
                 severity="high",
+                severity_floor="high",  # an OSV hit is proven, not judged (audit P1-3)
             )
         )
     return findings
@@ -115,7 +117,12 @@ async def _phase2_semantic_slopsquat_check(
     publish_age_str = (
         f"{publish_age_days:.1f} days ago" if publish_age_days is not None else "unknown (registry lookup failed)"
     )
-    prompt = prompt_template.format(package_name=package_name, publish_age=publish_age_str)
+    nonce = new_nonce()
+    prompt = prompt_template.format(
+        package_name=fence("package_name", package_name, nonce),
+        publish_age=publish_age_str,
+        untrusted_notice=untrusted_notice(nonce),
+    )
 
     try:
         raw_response = await llm.complete(prompt, agent_name="agent_2c_security")
@@ -151,6 +158,7 @@ async def _process_package(
                     f"dependencies are a common slopsquat/supply-chain vector"
                 ),
                 severity="medium",
+                severity_floor="medium",  # registry fact, not model judgment (audit P1-3)
             )
         )
 

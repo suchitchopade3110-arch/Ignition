@@ -9,6 +9,8 @@ verification have been removed before reaching you. Do not re-litigate
 whether a finding is real; your job is synthesis, deduplication, and
 severity-consistent framing.
 
+{untrusted_notice}
+
 Findings to synthesize:
 {verified_findings}
 

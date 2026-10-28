@@ -6,6 +6,8 @@ slopsquatting/typosquatting risk — suspiciously-named packages that
 predate any CVE record and wouldn't be caught by a registry/vuln lookup
 alone.
 
+{untrusted_notice}
+
 Package: {package_name}
 Actual npm publish age of this version (real registry data, not an
 estimate): {publish_age}
