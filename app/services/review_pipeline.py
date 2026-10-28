@@ -246,7 +246,9 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     # the analyzer or an LLM. Unreadable settings fail closed: the owner
     # may have turned AI review off, so the code is not sent anywhere.
     try:
-        cfg = await asyncio.to_thread(repo_repo.get_or_create_settings, event.repository.full_name.replace("/", "_"))
+        # By GitHub's numeric repository id (P2 repo IDs).
+        cfg = await asyncio.to_thread(repo_repo.get_or_create_settings, event.repository.id,
+                                      event.repository.full_name)
     except Exception:
         logger.exception("Could not load repo settings", extra={"review_id": review_id})
         status_reason = "failed: could not load repo settings"

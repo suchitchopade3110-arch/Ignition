@@ -9,6 +9,9 @@ from pydantic import BaseModel
 
 
 class Repository(BaseModel):
+    # GitHub's numeric repository id: the key for repo rows and settings (P2
+    # repo IDs). full_name is display only; owner_name forms can collide.
+    id: int
     full_name: str
     default_branch: str
     clone_url: str  # public HTTPS git URL — what the AST analyzer clones from

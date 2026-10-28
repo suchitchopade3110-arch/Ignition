@@ -214,7 +214,7 @@ def _handle_installation_event(event_type: str, payload: dict) -> None:
                 full_name = repo.get("full_name")
                 if not full_name:
                     continue
-                repo_repo.get_or_create_repo(full_name)
+                repo_repo.get_or_create_repo(full_name, github_repo_id=repo.get("id"))
                 repo_repo.set_repo_installed(full_name, True)
             logger.info("Installation event: registered repos", extra={"action": action, "count": len(repos)})
         elif action in ("deleted", "suspend"):
@@ -232,7 +232,7 @@ def _handle_installation_event(event_type: str, payload: dict) -> None:
             full_name = repo.get("full_name")
             if not full_name:
                 continue
-            repo_repo.get_or_create_repo(full_name)
+            repo_repo.get_or_create_repo(full_name, github_repo_id=repo.get("id"))
             repo_repo.set_repo_installed(full_name, True)
         for repo in payload.get("repositories_removed") or []:
             full_name = repo.get("full_name")
@@ -320,7 +320,8 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     review_id = str(uuid.uuid4())
 
     # Ensure repository is registered
-    await asyncio.to_thread(repo_repo.get_or_create_repo, event.repository.full_name)
+    await asyncio.to_thread(repo_repo.get_or_create_repo, event.repository.full_name,
+                            github_repo_id=event.repository.id)
 
     # Idempotency: a duplicate delivery for the same (repo, PR, head commit)
     # must not spawn a second LangGraph run. Enforced as a DB-level unique
@@ -447,14 +448,15 @@ def get_repos(repos: frozenset[str] = Depends(get_accessible_repos)):
     return [Repository(**r) for r in repo_repo.list_repos(repo_names=repos)]
 
 
+# repo_id is GitHub's numeric repository id (P2 repo IDs), not owner_name.
 @api_router.get("/repos/{repo_id}/settings", response_model=RepositorySettings)
-def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_access)):
+def get_repo_settings(repo_id: int, _: AuthUser = Depends(require_repo_id_access)):
     return RepositorySettings(**repo_repo.get_or_create_settings(repo_id))
 
 
 @api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings, dependencies=[Depends(verify_csrf_token)])
 def update_repo_settings(
-    repo_id: str, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
+    repo_id: int, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
 ):
     settings_dict = settings_update.model_dump()
     return RepositorySettings(**repo_repo.update_settings(repo_id, settings_dict))

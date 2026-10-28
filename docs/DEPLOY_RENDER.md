@@ -33,14 +33,17 @@ webhooks, and reviews will all fail. Have these ready:
 - **A Supabase project** (URL + service key) — Postgres + pgvector. Run the
   `migrations*.sql` files at the repo root against it, in order
   (`migrations.sql` first, then `migrations_002_...` through the
-  highest-numbered file, currently `migrations_019_...`) — Supabase's SQL
+  highest-numbered file, currently `migrations_020_...`) — Supabase's SQL
   Editor works fine for this, or `psql` if you'd rather. **Skipping 012
   makes every review that has a finding fail** (the Critic reads
   `hitl_finding_outcomes`). **013 turns on row-level security**: before
   running it, confirm `SUPABASE_SERVICE_KEY` is the `service_role` key, or
   the backend loses access too. This prints only the key's role claim:
   `python3 -c 'import os,base64,json; p=os.environ["SUPABASE_SERVICE_KEY"].split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4)))["role"])'`
-  — it must print `service_role`. Both the web service and the worker
+  — it must print `service_role`. **After 020**, on a project that already
+  has repos, run `python scripts/backfill_github_repo_ids.py` once from the
+  backend's shell: it fills in GitHub's numeric repo ids, which the
+  settings pages now use. Both the web service and the worker
   refuse to start while a required table is missing: their logs name it
   ("Required Supabase tables are missing or unreadable: ...").
 - **An LLM API key** — Groq by default (`LLM_PROVIDER=groq`, free tier

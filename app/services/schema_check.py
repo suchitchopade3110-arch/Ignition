@@ -31,6 +31,14 @@ REQUIRED_FUNCTIONS = {
 }
 
 
+# Columns added to existing tables that the code keys on (migrations_020,
+# P2 repo IDs). Reported as "<table>.<column>".
+REQUIRED_COLUMNS = (
+    ("repositories", "github_repo_id"),
+    ("repository_settings", "github_repo_id"),
+)
+
+
 def find_missing_tables(db) -> list[str]:
     """Tables (and SQL functions) that can't be used. limit(0) returns no
     rows, so this costs one cheap round-trip per table. An unreachable
@@ -42,6 +50,15 @@ def find_missing_tables(db) -> list[str]:
         except Exception as exc:
             logger.error("Required table check failed", extra={"table": table, "error_class": type(exc).__name__})
             missing.append(table)
+    for table, column in REQUIRED_COLUMNS:
+        if table in missing:
+            continue
+        try:
+            db.table(table).select(column).limit(0).execute()
+        except Exception as exc:
+            logger.error("Required column check failed",
+                         extra={"table": table, "column": column, "error_class": type(exc).__name__})
+            missing.append(f"{table}.{column}")
     for function, params in REQUIRED_FUNCTIONS.items():
         try:
             db.rpc(function, params).execute()

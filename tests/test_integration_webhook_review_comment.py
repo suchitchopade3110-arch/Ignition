@@ -145,7 +145,7 @@ class FakeRepoRepo:
         }
         self.settings_requests: list[str] = []
 
-    def get_or_create_repo(self, repo_full_name):
+    def get_or_create_repo(self, repo_full_name, github_repo_id=None):
         repo_id = repo_full_name.replace("/", "_")
         self.repos.setdefault(repo_id, {"id": repo_id})
         return self.repos[repo_id]
@@ -167,6 +167,7 @@ def _webhook_payload() -> dict:
     return {
         "action": "opened",
         "repository": {
+            "id": 1001,  # GitHub's numeric repository id, in every real payload
             "full_name": "acme/widgets",
             "default_branch": "main",
             "clone_url": "https://github.com/acme/widgets.git",

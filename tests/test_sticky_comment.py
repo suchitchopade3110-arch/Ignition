@@ -73,7 +73,7 @@ def _signed(body: bytes) -> str:
 def _pr_event(action="opened", draft=False):
     return {
         "action": action,
-        "repository": {"full_name": "acme/widgets", "default_branch": "main",
+        "repository": {"id": 1001, "full_name": "acme/widgets", "default_branch": "main",
                        "clone_url": "https://github.com/acme/widgets.git"},
         "pull_request": {"number": 7, "draft": draft, "diff_url": "https://github.com/acme/widgets/pull/7.diff",
                          "head": {"sha": "a" * 40}, "base": {"sha": "b" * 40}},
@@ -89,7 +89,7 @@ async def _post_webhook(payload, monkeypatch):
         return pool
 
     monkeypatch.setattr(main_module, "get_arq_pool", get_pool)
-    monkeypatch.setattr(main_module.repo_repo, "get_or_create_repo", lambda name: {"id": name})
+    monkeypatch.setattr(main_module.repo_repo, "get_or_create_repo", lambda name, github_repo_id=None: {"id": name})
     monkeypatch.setattr(main_module.review_repo, "create_review", lambda **kw: kw)
     monkeypatch.setattr(main_module.review_repo, "update_review", lambda rid, upd: upd)
     body = json.dumps(payload).encode()

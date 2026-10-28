@@ -289,13 +289,13 @@ async def require_repo_full_name_access(
 
 
 async def require_repo_id_access(
-    request: Request, repo_id: str, user: AuthUser = Depends(get_current_user)
+    request: Request, repo_id: int, user: AuthUser = Depends(get_current_user)
 ) -> AuthUser:
     """Dependency for routes shaped /api/repos/{repo_id}/... where repo_id
-    is the short `owner_name` form, not owner/name."""
+    is GitHub's numeric repository id (P2 repo IDs)."""
     try:
         res = await asyncio.to_thread(
-            _repo_repo._db.table(_repo_repo.TABLE).select("owner", "name").eq("id", repo_id).execute
+            _repo_repo._db.table(_repo_repo.TABLE).select("owner", "name").eq("github_repo_id", repo_id).execute
         )
     except Exception:
         logger.exception("Repo lookup failed (datastore unreachable?)")

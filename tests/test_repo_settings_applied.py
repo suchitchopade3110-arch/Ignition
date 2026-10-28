@@ -113,7 +113,8 @@ async def test_ai_review_off_runs_nothing_and_concludes_neutral(fake_repos, mock
     fake_repo_repo.settings["enable_ai_review"] = False
     event_payload, review_id, correlation_id = await _enqueue(mock_arq)
     await run_review_job({}, event_payload, review_id, correlation_id)
-    assert fake_repo_repo.settings_requests == ["acme_widgets"]
+    # Loaded by GitHub's numeric repository id (P2 repo IDs), not owner_name.
+    assert fake_repo_repo.settings_requests == [1001]
     ASTClient.analyze_git.assert_not_awaited()
     gh = mock_externals["github_instance"]
     kwargs = gh.complete_check_run.call_args.kwargs

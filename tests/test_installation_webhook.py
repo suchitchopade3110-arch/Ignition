@@ -49,14 +49,16 @@ async def test_installation_created_registers_repos(fake_repo_repo):
     payload = {
         "action": "created",
         "installation": {"id": 42},
-        "repositories": [{"full_name": "acme/widgets"}, {"full_name": "acme/gadgets"}],
+        "repositories": [{"id": 11, "full_name": "acme/widgets"}, {"id": 12, "full_name": "acme/gadgets"}],
     }
     response = await _post_webhook(json.dumps(payload).encode(), "installation", "install-created-1")
 
     assert response.status_code == 202
     assert response.json() == {"status": "processed", "event": "installation"}
     assert fake_repo_repo.get_or_create_repo.call_count == 2
-    fake_repo_repo.get_or_create_repo.assert_any_call("acme/widgets")
+    # Registered by GitHub's numeric id (P2 repo IDs), which every real
+    # installation payload carries.
+    fake_repo_repo.get_or_create_repo.assert_any_call("acme/widgets", github_repo_id=11)
     fake_repo_repo.set_repo_installed.assert_any_call("acme/widgets", True)
     fake_repo_repo.set_repo_installed.assert_any_call("acme/gadgets", True)
 
@@ -82,13 +84,13 @@ async def test_installation_repositories_added_and_removed(fake_repo_repo):
     payload = {
         "action": "added",
         "installation": {"id": 42},
-        "repositories_added": [{"full_name": "acme/new-repo"}],
+        "repositories_added": [{"id": 21, "full_name": "acme/new-repo"}],
         "repositories_removed": [{"full_name": "acme/old-repo"}],
     }
     response = await _post_webhook(json.dumps(payload).encode(), "installation_repositories", "install-repos-1")
 
     assert response.status_code == 202
-    fake_repo_repo.get_or_create_repo.assert_called_once_with("acme/new-repo")
+    fake_repo_repo.get_or_create_repo.assert_called_once_with("acme/new-repo", github_repo_id=21)
     fake_repo_repo.set_repo_installed.assert_any_call("acme/new-repo", True)
     fake_repo_repo.set_repo_installed.assert_any_call("acme/old-repo", False)
 
