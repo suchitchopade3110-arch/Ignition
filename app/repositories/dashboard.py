@@ -148,6 +148,9 @@ class ReviewRepository:
             "diffs": row.get("diffs") or [],
             "github_comment_preview": row.get("github_comment_preview"),
             "final_comment_markdown": row.get("final_comment_markdown"),
+            # Why a review ended the way it did (incomplete, superseded, timed
+            # out, ...); approve_hitl reads it to conclude the check run.
+            "status_reason": row.get("status_reason"),
         }
 
     def get_review(self, review_id: str) -> dict | None:

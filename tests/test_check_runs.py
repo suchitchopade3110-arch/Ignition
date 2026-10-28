@@ -204,3 +204,13 @@ async def test_rejecting_concludes_the_check_as_dismissed(override_auth, fake_re
     kwargs = gh.complete_check_run.call_args.kwargs
     assert (kwargs["check_run_id"], kwargs["conclusion"], kwargs["title"]) == (
         77, "neutral", "Review dismissed by a maintainer")
+
+
+@pytest.mark.asyncio
+async def test_approving_an_incomplete_review_concludes_review_incomplete(override_auth, fake_review):
+    fake_review["review-1"].update({"commit_sha": HEAD, "check_run_id": 77,
+                                    "status_reason": "incomplete: one or more agents failed"})
+    gh = _paused_gh()
+    assert (await _hitl("approve", gh)).status_code == 200
+    kwargs = gh.complete_check_run.call_args.kwargs
+    assert (kwargs["conclusion"], kwargs["title"]) == ("neutral", "Review incomplete")
