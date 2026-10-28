@@ -11,6 +11,7 @@ each route does once past auth, not auth itself. The CSRF dependency
 (app/security.py::verify_csrf_token) is overridden the same way here for
 the same reason — it's covered directly in tests/test_csrf.py.
 """
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -21,6 +22,7 @@ from app.auth import AuthUser, get_current_user, require_review_repo_access
 from app.security import verify_csrf_token
 from app.services.review_pipeline import review_repo
 from app.services.stream_manager import stream_manager
+from tests.fake_supabase import FakeSupabase
 
 _FAKE_USER = AuthUser(id="u1", github_id=1, login="octocat")
 
@@ -38,45 +40,44 @@ def override_auth():
 
 @pytest.fixture
 def fake_review(monkeypatch):
-    """A single review row plus the minimal review_repo surface the HITL
-    routes touch, faked the same way as
-    test_integration_webhook_review_comment.FakeReviewRepo."""
-    rows = {
-        "review-1": {
-            "id": "review-1",
-            "status": "waiting_hitl",
-            "repo_full_name": "acme/widgets",
-            "installation_id": 999,
-            "pr_number": 7,
-            "final_comment_markdown": "## Review\nLooks fine.",
-            "correlation_id": "corr-1",
-            "findings": [
-                {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
-                {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
-                {"patternKey": "agent_2c_security:high:cve", "severity": "high"},
-            ],
-        }
+    """A single review row in an in-memory Supabase fake
+    (tests/fake_supabase.py). The real ReviewRepository methods run against
+    it, so the approve/reject compare-and-set (a conditional UPDATE, audit
+    P1-6) behaves the way a single PostgREST UPDATE ... WHERE does. Indexing
+    the returned object by review id gives the live row."""
+    db = FakeSupabase({"reviews": [{
+        "id": "review-1",
+        "status": "waiting_hitl",
+        "repo_full_name": "acme/widgets",
+        "installation_id": 999,
+        "pr_number": 7,
+        "title": "PR #7",
+        "created_at": "2026-10-27T00:00:00+00:00",
+        "final_comment_markdown": "## Review\nLooks fine.",
+        "correlation_id": "corr-1",
+        "findings": [
+            {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
+            {"patternKey": "agent_2a_struct:boundary:repositories->routes", "severity": "high"},
+            {"patternKey": "agent_2c_security:high:cve", "severity": "high"},
+        ],
+    }]})
+    monkeypatch.setattr(review_repo, "_db", db)
+
+    class Rows:
+        def __getitem__(self, review_id):
+            return next(r for r in db.tables["reviews"] if r["id"] == review_id)
+
+    return Rows()
+
+
+def _github(post_side_effect=None):
+    gh = MagicMock()
+    gh.upsert_sticky_comment.return_value = {
+        "id": 123, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-123",
     }
-
-    def get_review(review_id):
-        return rows.get(review_id)
-
-    def get_review_github_context(review_id):
-        row = rows.get(review_id)
-        if not row:
-            return None
-        return {k: row.get(k) for k in
-                ("repo_full_name", "installation_id", "pr_number", "final_comment_markdown", "correlation_id",
-                 "commit_sha")}
-
-    def update_review(review_id, updates):
-        rows.setdefault(review_id, {}).update(updates)
-        return rows[review_id]
-
-    monkeypatch.setattr(review_repo, "get_review", get_review)
-    monkeypatch.setattr(review_repo, "get_review_github_context", get_review_github_context)
-    monkeypatch.setattr(review_repo, "update_review", update_review)
-    return rows
+    if post_side_effect is not None:
+        gh.upsert_sticky_comment.side_effect = post_side_effect
+    return gh
 
 
 @pytest.mark.asyncio
@@ -136,12 +137,18 @@ async def test_approve_hitl_surfaces_github_post_failure_as_502(override_auth, f
     this is the exact failure mode app/main.py's own docstring calls out."""
     mock_gh_instance = MagicMock()
     mock_gh_instance.upsert_sticky_comment.side_effect = RuntimeError("GitHub API unreachable")
-    with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance):
+    mock_ledger = MagicMock()
+    with patch("app.services.github_client.GitHubClient", return_value=mock_gh_instance), \
+         patch("app.main.LedgerRepository", return_value=mock_ledger):
         transport = httpx.ASGITransport(app=main_module.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post("/api/hitl/review-1/approve")
 
     assert response.status_code == 502
+    # Audit P1-6: the claim is rolled back so the human can retry, and no
+    # approve outcome is learned from an approval that never posted.
+    assert fake_review["review-1"]["status"] == "waiting_hitl"
+    mock_ledger.record_hitl_outcome.assert_not_called()
     # The comment preview URL must never be recorded when the post itself
     # failed — that's the "silently returning success" failure mode the
     # route's own docstring calls out.
@@ -165,7 +172,7 @@ async def test_reject_hitl_publishes_rejected_events(override_auth, fake_review)
 
     assert response.status_code == 200
     assert response.json() == {"success": True}
-    assert fake_review["review-1"]["status"] == "completed"
+    assert fake_review["review-1"]["status"] == "rejected"
     published_types = [call.args[1]["type"] for call in mock_publish.await_args_list]
     assert "hitl.rejected" in published_types
     assert "review.completed" in published_types
@@ -239,3 +246,45 @@ async def test_approving_a_superseded_review_posts_nothing(override_auth, fake_r
     mock_gh_instance.upsert_sticky_comment.assert_not_called()
     assert fake_review["review-1"]["status"] == "cancelled"
     assert fake_review["review-1"]["status_reason"] == f"superseded by {'b' * 40}"
+
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_approves_post_exactly_once(override_auth, fake_review):
+    """Audit P1-6: two approve clicks (or two tabs) race. Exactly one wins the
+    waiting_hitl -> posting compare-and-set; the other gets 409."""
+    gh = _github()
+    with patch("app.services.github_client.GitHubClient", return_value=gh), \
+         patch.object(stream_manager, "publish", new=AsyncMock()):
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first, second = await asyncio.gather(
+                client.post("/api/hitl/review-1/approve"), client.post("/api/hitl/review-1/approve"),
+            )
+    assert sorted([first.status_code, second.status_code]) == [200, 409]
+    assert gh.upsert_sticky_comment.call_count == 1
+    assert fake_review["review-1"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reject_is_a_compare_and_set_too(override_auth, fake_review):
+    with patch.object(stream_manager, "publish", new=AsyncMock()):
+        transport = httpx.ASGITransport(app=main_module.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            first = await client.post("/api/hitl/review-1/reject")
+            second = await client.post("/api/hitl/review-1/reject")
+            approve_after_reject = await client.post("/api/hitl/review-1/approve")
+    assert (first.status_code, second.status_code, approve_after_reject.status_code) == (200, 409, 409)
+    assert fake_review["review-1"]["status"] == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_review_still_renders_in_the_api(override_auth, fake_review):
+    """'rejected' is a real status now (audit P1-6); the API schema must accept it."""
+    fake_review["review-1"]["status"] = "rejected"
+    fake_review["review-1"]["findings"] = []  # the fixture's findings are outcome stubs, not full findings
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/reviews/review-1")
+    assert response.status_code == 200
+    assert response.json()["status"] == "rejected"

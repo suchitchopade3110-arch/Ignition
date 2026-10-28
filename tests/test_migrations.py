@@ -28,3 +28,9 @@ def test_rls_migration_enables_rls_on_every_public_table_and_revokes_anon():
 def test_hitl_outcomes_index_matches_the_repo_scoped_rejection_query():
     sql = _sql(14)
     assert "ON hitl_finding_outcomes (repo_full_name, pattern_key, created_at DESC)" in sql
+
+
+def test_review_status_gains_posting_and_rejected():
+    sql = _sql(15)
+    assert "ALTER TYPE review_status ADD VALUE IF NOT EXISTS 'posting';" in sql
+    assert "ALTER TYPE review_status ADD VALUE IF NOT EXISTS 'rejected';" in sql

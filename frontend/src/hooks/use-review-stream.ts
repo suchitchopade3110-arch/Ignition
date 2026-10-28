@@ -71,7 +71,8 @@ export function useReviewStream(reviewId: string, initialData?: InitialData) {
       state.status === "completed" ||
       state.status === "failed" ||
       state.status === "waiting_hitl" ||
-      state.status === "cancelled"
+      state.status === "cancelled" ||
+      state.status === "rejected"
 
     if (isTerminal) {
       setState((s) => ({

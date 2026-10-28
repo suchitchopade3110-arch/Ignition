@@ -15,7 +15,7 @@ SeverityLevel = Literal[
 ]
 
 ReviewStatusType = Literal[
-    "queued", "running", "paused", "waiting_hitl", "completed", "failed", "cancelled"
+    "queued", "running", "paused", "waiting_hitl", "posting", "completed", "failed", "cancelled", "rejected"
 ]
 
 class Repository(CamelModel):

@@ -519,6 +519,19 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     if gh_context.get("correlation_id"):
         set_correlation_id(gh_context["correlation_id"])
 
+    # Compare-and-set claim (audit P1-6): PostgREST's update ... eq(status)
+    # is one UPDATE ... WHERE status = 'waiting_hitl' RETURNING, so exactly
+    # one concurrent approve wins; every other gets 409 and posts nothing.
+    reviews = review_repo._db.table(review_repo.TABLE)
+    claimed = reviews.update({"status": "posting"}).eq("id", review_id).eq("status", "waiting_hitl").execute()
+    if not claimed.data:
+        raise HTTPException(status_code=409, detail="Review is not awaiting approval")
+
+    def _release_claim() -> None:
+        # Post didn't happen: hand the review back so a human can retry.
+        review_repo._db.table(review_repo.TABLE).update({"status": "waiting_hitl"}) \
+            .eq("id", review_id).eq("status", "posting").execute()
+
     from app.services.github_client import GitHubClient
 
     try:
@@ -526,6 +539,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         current_head = gh.get_pr_head_sha(gh_context["repo_full_name"], gh_context["pr_number"])
     except Exception as e:
         logger.exception("Failed to read the PR's current head from GitHub: %s", e)
+        _release_claim()
         raise HTTPException(status_code=502, detail="Could not reach GitHub to post the approval")
     # Same rule as the pipeline's "check again before posting" (audit P1-8):
     # the comment is sticky, so approving a review of an older commit would
@@ -534,12 +548,9 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         review_repo.update_review(review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
         raise HTTPException(status_code=409, detail=f"This review is superseded by {current_head}; nothing was posted")
 
-    review_repo.update_review(review_id, {"status": "completed"})
-    _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
-
-    # Post final comment to GitHub. A failure here is surfaced to the
-    # caller (502), not swallowed — silently returning success while the
-    # comment never posted is exactly the failure mode this fix closes.
+    # Post through the sticky comment (audit P1-8), so even a retried post
+    # after a timeout is an edit, never a duplicate. A failure is surfaced
+    # (502) and the claim released — never a silent "approved".
     try:
         logger.info("Posting HITL-approved comment to GitHub", extra={
             "review_id": review_id, "repo_full_name": gh_context["repo_full_name"], "pr_number": gh_context["pr_number"],
@@ -552,12 +563,18 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         )
     except Exception as e:
         logger.exception("Failed to post human approval comment to GitHub: %s", e)
+        _release_claim()
         raise HTTPException(status_code=502, detail=f"Failed to post approval comment to GitHub: {e}")
 
     logger.info("GitHub comment posted", extra={
         "review_id": review_id, "github_comment_url": github_response.get("html_url"),
     })
-    review_repo.update_review(review_id, {"github_comment_preview": github_response.get("html_url")})
+    review_repo.update_review(
+        review_id, {"status": "completed", "github_comment_preview": github_response.get("html_url")}
+    )
+    # Only now, after the post succeeded, is this a real approval worth
+    # learning from (audit P1-6).
+    _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
 
     # Publish hitl.approved and completed events
     await stream_manager.publish(review_id, {"type": "hitl.approved", "reviewId": review_id})
@@ -578,7 +595,13 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
-    review_repo.update_review(review_id, {"status": "completed"})  # or failed/rejected
+    # Same compare-and-set as approve (audit P1-6): only a review still
+    # awaiting a human can be rejected, and only once.
+    claimed = review_repo._db.table(review_repo.TABLE).update({"status": "rejected"}) \
+        .eq("id", review_id).eq("status", "waiting_hitl").execute()
+    if not claimed.data:
+        raise HTTPException(status_code=409, detail="Review is not awaiting approval")
+    review_repo.update_review(review_id, {"status": "rejected"})  # stamps completed_at/duration
 
     gh_context = review_repo.get_review_github_context(review_id)
     if gh_context and gh_context.get("repo_full_name"):

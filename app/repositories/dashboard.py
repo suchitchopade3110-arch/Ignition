@@ -69,11 +69,11 @@ class ReviewRepository:
 
     def update_review(self, review_id: str, updates: dict) -> dict:
         # If status changes to completed/failed, set completed_at
-        if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled"):
+        if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting"):
             updates["completed_at"] = datetime.utcnow().isoformat() + "Z"
         
         # Calculate duration if completed_at is set
-        if "completed_at" in updates or ("status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled")):
+        if "completed_at" in updates or ("status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting")):
             review = self.get_review(review_id)
             if review:
                 created_at_str = review.get("created_at")
