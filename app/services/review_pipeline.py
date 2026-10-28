@@ -24,6 +24,7 @@ from app.services.ast_client import ASTClient
 from app.services.stream_manager import stream_manager
 from app.services import metrics
 from app.services import check_runs
+from app.services.prompt_safety import sanitize_narrative
 from app.graph.workflow import build_graph
 from app.graph.state import ReviewState
 from app.repositories.dashboard import ReviewRepository, RepoRepository
@@ -96,6 +97,52 @@ async def _cancel_as_superseded(review_id: str, newer_sha: str, check: _CheckRun
         review_id, {"type": "review.failed", "reviewId": review_id, "status": "cancelled"}
     )
     await check.could_not_finish(status_reason)
+
+
+def timed_out_comment(budget_s: str, verified: list) -> str:
+    """The sticky comment for a review cut off by its time budget (P2): the
+    findings the Critic verified, if it got that far, under a heading that
+    says the review is incomplete. Never reads as a clean pass."""
+    lines = [
+        "## Ignition Review — incomplete",
+        "",
+        f"This review timed out after {budget_s} s, so it is incomplete. "
+        "Push again or re-run the check to get a full review.",
+        "",
+    ]
+    if not verified:
+        lines.append("No findings were verified before the timeout. That is not a clean pass: "
+                     "parts of this PR were not reviewed.")
+    else:
+        lines.append(f"Verified before the timeout ({len(verified)}):")
+        lines.append("")
+        for f in verified:
+            location = f"{f.file_path}:{f.line}" if f.line else f.file_path
+            description = sanitize_narrative(f.description).replace("\n", " ")
+            lines.append(f"- **{f.severity}** `{location}`: {description}")
+    return "\n".join(lines)
+
+
+async def _post_incomplete_comment(event: PullRequestWebhook, markdown: str, review_id: str) -> None:
+    """Best effort, and only if the PR's head hasn't moved (same rule as
+    finalize_and_post, P1-8): a newer push owns the sticky comment."""
+    from app.services.github_client import GitHubClient
+
+    def post():
+        gh = GitHubClient(installation_id=event.installation.id)
+        head = event.pull_request.head_sha
+        if head:
+            current = gh.get_pr_head_sha(event.repository.full_name, event.pull_request.number)
+            if current and current != head:
+                return False
+        gh.upsert_sticky_comment(repo_full_name=event.repository.full_name, pr_number=event.pull_request.number,
+                                 body=markdown, bot_login=gh.bot_login)
+        return True
+
+    try:
+        await asyncio.to_thread(post)
+    except Exception:
+        logger.exception("Could not post the incomplete-review comment", extra={"review_id": review_id})
 
 
 def parse_diff(diff_text: str) -> tuple[int, int, int, list[dict]]:
@@ -406,7 +453,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     )
 
     # What the check run's conclusion is built from (audit P0-6).
-    outcome: dict = {"findings": [], "incomplete": False, "rejection_reason": None}
+    outcome: dict = {"findings": [], "incomplete": False, "rejection_reason": None, "verified": []}
 
     try:
         # 2. Build Graph State
@@ -512,6 +559,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                     elif node_name == "agent_3_critic":
                         agents_progress["agent_3_critic"]["status"] = "completed"
                         verified = node_output.get("verified_findings", [])
+                        outcome["verified"] = verified  # posted if the review then times out (P2)
                         findings_count = len(verified)
                         agents_progress["agent_3_critic"]["findingCount"] = findings_count
 
@@ -734,40 +782,25 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
         try:
             await asyncio.wait_for(_stream_graph(), timeout=settings.review_latency_budget_seconds)
         except asyncio.TimeoutError:
-            # The PRD's bounded self-correction principle (hallucination retries'
-            # give up after a cap and flag for human) applied to wall-clock time
-            # instead of retry count: don't leave the review hanging, don't just
-            # silently drop it — force it into the same human-escalation terminal
-            # state the graph already uses for a critical HITL gate
-            # (route_hitl -> pause_for_human_approval in app/graph/routing.py),
-            # since a timed-out review inherently has unverified/incomplete state
-            # that a human should look at, not an automated pass/fail verdict.
-            logger.warning(
-                "Review %s exceeded latency budget (%ds) — flagging for human review",
-                review_id, settings.review_latency_budget_seconds,
-            )
-            status_reason = (
-                f"timed out — exceeded review_latency_budget_seconds ({settings.review_latency_budget_seconds}s)"
-            )
+            # Not routed to HITL (P2 "Timeout posts an empty approval"): there
+            # is nothing complete for a human to approve. The review ends
+            # failed, the PR's sticky comment shows what the Critic verified
+            # before the cut-off, marked incomplete, and the check is neutral.
+            budget_s = f"{settings.review_latency_budget_seconds:g}"
+            status_reason = f"timed out after {budget_s} s"
+            logger.warning("Review %s timed out after %s s", review_id, budget_s)
+            markdown = timed_out_comment(budget_s, outcome["verified"])
             await asyncio.to_thread(review_repo.update_review,
                 review_id,
-                {
-                    "status": "waiting_hitl",
-                    "hitl_severity": "critical",
-                    "severity": "critical",
-                    "status_reason": status_reason,
-                },
+                {"status": "failed", "status_reason": status_reason, "final_comment_markdown": markdown},
             )
+            await _post_incomplete_comment(event, markdown, review_id)
             await stream_manager.publish(
                 review_id,
-                {
-                    "type": "waiting.hitl",
-                    "reviewId": review_id,
-                    "status": "waiting_hitl",
-                },
+                {"type": "review.failed", "reviewId": review_id, "status": "failed"},
             )
             _record_terminal_metric("timed_out")
-            await check.could_not_finish(status_reason)
+            await check.conclude("neutral", check_runs.could_not_finish_title(status_reason), summary=markdown)
             return
 
     except asyncio.CancelledError:
