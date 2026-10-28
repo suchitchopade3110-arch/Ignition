@@ -602,6 +602,11 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
         set_correlation_id(gh_context["correlation_id"])
 
     async def event_generator():
+        # An SSE comment straight away: the Next.js rewrite (audit P0-5)
+        # forwards response headers only with the first body byte, so
+        # without this the browser's EventSource wouldn't open until the
+        # first real event. Comment lines are ignored by EventSource.
+        yield ": connected\n\n"
         try:
             async for event in stream_manager.stream(review_id):
                 payload = SseEventPayload(**event)
@@ -621,6 +626,9 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
         headers={
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
+            # The stream now reaches the browser through the frontend's
+            # Next.js rewrite (audit P0-5); tell any proxy not to buffer it.
+            "X-Accel-Buffering": "no",
         },
     )
 

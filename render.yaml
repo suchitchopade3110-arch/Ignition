@@ -13,7 +13,9 @@
 # file, just the one already built for it, wired up.
 #
 # `frontend` is Next.js's own server (`next start`), not a static export —
-# the app has auth-gated SSR routes.
+# the app has auth-gated SSR routes. It is also the only origin the browser
+# talks to: next.config.ts rewrites /api/* and /auth/* to the backend
+# (audit P0-5), so session cookies are first-party and SameSite=Lax works.
 
 services:
   - type: redis
@@ -44,19 +46,20 @@ services:
         value: http://localhost:4000
       - key: METRICS_ENABLED
         value: "true"
-      # Two *.onrender.com services (no custom domain) are cross-site per
-      # the Public Suffix List — Lax cookies never attach to the
-      # frontend's cross-origin fetch() calls. See app/config.py's
-      # session_cookie_samesite comment. Flip back to "lax" once/if
-      # backend+frontend move behind a shared custom domain.
+      # Same-origin topology (audit P0-5): the browser reaches this service
+      # only through the frontend's /api and /auth rewrites, so cookies are
+      # first-party and Lax is correct again.
       - key: SESSION_COOKIE_SAMESITE
-        value: none
+        value: lax
+      # The PUBLIC origin of this API — the frontend, which proxies it. The
+      # OAuth redirect_uri is built from this, so GitHub sends the user back
+      # through the frontend and the session cookie is set there.
       # BACKEND_BASE_URL, FRONTEND_BASE_URL and ALLOWED_ORIGINS all need
       # the real onrender.com hostnames Render assigns on first deploy —
-      # see docs/DEPLOY_RENDER.md step 4. Placeholders below assume
+      # see docs/DEPLOY_RENDER.md step 3. Placeholders below assume
       # `ignition-backend`/`ignition-frontend` weren't already taken.
       - key: BACKEND_BASE_URL
-        value: https://ignition-backend.onrender.com
+        value: https://ignition-frontend.onrender.com
       - key: FRONTEND_BASE_URL
         value: https://ignition-frontend.onrender.com
       - key: ALLOWED_ORIGINS
@@ -113,9 +116,16 @@ services:
         value: "20"
       # NEXT_PUBLIC_* vars are inlined at build time, not read at runtime
       # — changing this after the first deploy needs a rebuild (Manual
-      # Deploy > Clear build cache & deploy), not just a restart. Same
-      # collision caveat as BACKEND_BASE_URL above.
+      # Deploy > Clear build cache & deploy), not just a restart.
+      # Same-origin (audit P0-5): the API is this app's own /api path.
       - key: NEXT_PUBLIC_API_URL
-        value: https://ignition-backend.onrender.com/api
+        value: /api
+      # Empty = same origin: the login link is /auth/github/login here.
+      - key: NEXT_PUBLIC_BACKEND_URL
+        value: ""
+      # Where next.config.ts's rewrites proxy /api and /auth. Read at build
+      # time; same collision caveat as BACKEND_BASE_URL above.
+      - key: BACKEND_INTERNAL_URL
+        value: https://ignition-backend.onrender.com
       - key: NEXT_PUBLIC_DEMO_MODE
         value: "false"

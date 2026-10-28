@@ -74,18 +74,25 @@ appends a random suffix instead. Check the actual URLs on each service's
 dashboard page, and if they don't match what's baked into `render.yaml`,
 update:
 
-- `ignition-backend` → `BACKEND_BASE_URL`, `FRONTEND_BASE_URL`,
-  `ALLOWED_ORIGINS` — to the real hostnames.
-- `ignition-frontend` → `NEXT_PUBLIC_API_URL` — to the real backend
-  hostname + `/api`. **This one needs a rebuild, not just a restart** —
-  `NEXT_PUBLIC_*` vars are inlined into the JS bundle at `next build` time.
+- `ignition-backend` → `BACKEND_BASE_URL` and `FRONTEND_BASE_URL` (both the
+  real **frontend** hostname — see "Same-origin API" below) and
+  `ALLOWED_ORIGINS` (the frontend hostname).
+- `ignition-frontend` → `BACKEND_INTERNAL_URL` — the real **backend**
+  hostname. **This one needs a rebuild, not just a restart** — the
+  rewrites in `frontend/next.config.ts` are built at `next build` time.
   After changing it: Manual Deploy → **Clear build cache & deploy**.
+  `NEXT_PUBLIC_API_URL` stays `/api` and `NEXT_PUBLIC_BACKEND_URL` stays
+  empty; they never name a hostname.
 
-## 4. Point GitHub at the deployed backend
+## 4. Point GitHub at the deployed services
 
 - GitHub App → Webhook URL: `https://<your-backend-host>/webhooks/github`
+  (webhooks come from GitHub's servers, not a browser, so they go straight
+  to the backend).
 - GitHub OAuth App (or the GitHub App's OAuth callback) → Authorization
-  callback URL: `https://<your-backend-host>/auth/github/callback`
+  callback URL: `https://<your-frontend-host>/auth/github/callback` — the
+  **frontend** host, which proxies it to the backend. That is what makes
+  the session cookie first-party.
 
 ## 5. Verify
 
@@ -100,15 +107,15 @@ update:
 
 ## Known rough edges
 
-- **`SESSION_COOKIE_SAMESITE=none`** is required here because
-  `ignition-backend.onrender.com` and `ignition-frontend.onrender.com` are
-  different sites per the Public Suffix List — a `Lax` cookie (Render's/
-  the app's old default) never attaches to the frontend's cross-origin
-  `fetch(..., credentials: "include")` calls, and login silently loops. If
-  you later move both services behind one custom domain (e.g.
-  `api.example.com` + `app.example.com`), you can switch back to `lax`,
-  the safer default — see the comment on `session_cookie_samesite` in
-  `app/config.py`.
+- **Same-origin API (audit P0-5).** `ignition-backend.onrender.com` and
+  `ignition-frontend.onrender.com` are different sites per the Public
+  Suffix List, so a browser calling the backend directly gets third-party
+  cookies: `Lax` never attaches, and Safari blocks even `None`. Instead the
+  browser only ever talks to the frontend, and `frontend/next.config.ts`
+  rewrites `/api/*` and `/auth/*` to `BACKEND_INTERNAL_URL`. Cookies are
+  first-party, `SESSION_COOKIE_SAMESITE=lax` works, and CORS preflights
+  disappear. The SSE stream sends `X-Accel-Buffering: no` so the proxy
+  doesn't hold events back.
 - **Image size**: `requirements.txt` currently resolves `torch` from
   PyPI's default (CUDA-enabled) build via `sentence-transformers`, even
   though this service is CPU-only — see the comment at the top of
