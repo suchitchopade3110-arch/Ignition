@@ -32,3 +32,15 @@ describe("StatusBadge", () => {
     expect(screen.getByText("Queued")).toBeInTheDocument()
   })
 })
+
+// Audit P1-6: "posting" (an approval being posted) and "rejected" (dismissed
+// by a maintainer) are real review statuses; the badge must name them
+// instead of falling back to "Queued".
+describe("StatusBadge — HITL resolution statuses", () => {
+  it("labels the posting and rejected statuses", () => {
+    render(<><StatusBadge status={"posting" as ReviewStatusType} /><StatusBadge status={"rejected" as ReviewStatusType} /></>)
+    expect(screen.getByText("Posting")).toBeInTheDocument()
+    expect(screen.getByText("Rejected")).toBeInTheDocument()
+    expect(screen.queryByText("Queued")).not.toBeInTheDocument()
+  })
+})

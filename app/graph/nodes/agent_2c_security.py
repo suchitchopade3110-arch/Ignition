@@ -8,26 +8,38 @@ Phase 2:   semantic slopsquat/typosquat heuristics (LLM), grounded in the
            real publish-recency data fetched in phase 1.5 rather than
            asked to guess metadata it was never given
 
-All three network calls for one package run sequentially (OSV depends on
-nothing else, but phase 2's prompt is grounded in phase 1.5's result, so
-that ordering is real), but different PACKAGES are independent of each
-other and run concurrently via asyncio.gather — a lockfile bump touching
-N packages is N packages in parallel, not N*3 calls in one serial queue.
+Bounded (audit P1-11): phases 1 and 1.5 run for every changed package, but
+all OSV and npm calls share one asyncio.Semaphore(4). Phase 2 is ONE
+batched prompt, and only for packages that are new in this PR (not just a
+version bump) AND either published under 7 days ago or within edit
+distance 2 of a popular npm name (app/data/popular_npm_packages.txt,
+refreshed by scripts/refresh_popular_npm.py). Without that list every new
+package goes to the model: fail toward checking, never toward skipping.
+A 50-package lockfile bump makes at most one LLM call.
 """
 import asyncio
 import logging
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 import httpx
 
 from app.config import get_settings
 from app.graph.state import ReviewState, Finding
+from app.schemas.ast_payload import PackageRef
 from app.services.llm_client import get_llm_client
+from app.services.prompt_safety import fence, new_nonce, untrusted_notice
 from app.services.finding_parser import parse_findings_json
 
 logger = logging.getLogger(__name__)
 
 PROMPT_PATH = Path(__file__).parent.parent.parent / "prompts" / "agent_2c_security.md"
+
+# One-per-line npm names (comments with #); the typosquat prefilter's list.
+POPULAR_PACKAGES_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "popular_npm_packages.txt"
+# Concurrent OSV + npm registry calls per review (audit P1-11).
+REGISTRY_CONCURRENCY = 4
+TYPOSQUAT_MAX_DISTANCE = 2
 
 OSV_API_URL = "https://api.osv.dev/v1/query"
 NPM_REGISTRY_URL = "https://registry.npmjs.org"
@@ -59,6 +71,7 @@ async def _phase1_deterministic_registry_check(
                 file_path="package.json",
                 description=f"Known vulnerability in {package_name}@{version}",
                 severity="high",
+                severity_floor="high",  # an OSV hit is proven, not judged (audit P1-3)
             )
         )
     return findings
@@ -98,41 +111,121 @@ async def _fetch_publish_age_days(
         return None
 
 
-async def _phase2_semantic_slopsquat_check(
-    package_name: str, publish_age_days: float | None
-) -> list[Finding]:
+class Phase2Failed(Exception):
+    pass
+
+
+async def _phase2_semantic_slopsquat_check(packages: list[tuple[str, float | None]]) -> list[Finding]:
     """
     Semantic heuristics for slopsquatted/typosquatted packages, grounded in
     the real publish-age data fetched above (rather than asked to invent
-    recency/maintainer/download signals it was never given).
+    recency/maintainer/download signals it was never given). ONE prompt for
+    every package that passed the prefilter (audit P1-11).
     """
     prompt_template = PROMPT_PATH.read_text()
     llm = get_llm_client()
-    publish_age_str = (
-        f"{publish_age_days:.1f} days ago" if publish_age_days is not None else "unknown (registry lookup failed)"
+    lines = [
+        f"- {name} — published "
+        + (f"{age:.1f} days ago" if age is not None else "unknown (registry lookup failed)")
+        for name, age in packages
+    ]
+    nonce = new_nonce()
+    prompt = prompt_template.format(
+        packages=fence("packages", "\n".join(lines), nonce),
+        untrusted_notice=untrusted_notice(nonce),
     )
-    prompt = prompt_template.format(package_name=package_name, publish_age=publish_age_str)
 
     try:
         raw_response = await llm.complete(prompt, agent_name="agent_2c_security")
         return parse_findings_json(raw_response, agent_name="agent_2c_security")
-    except Exception:
-        logger.exception("agent_2c_security phase-2 LLM call failed for %s; skipping", package_name)
-        return []
+    except Exception as exc:
+        logger.exception("agent_2c_security phase-2 LLM call failed for %d packages", len(packages))
+        raise Phase2Failed([name for name, _ in packages]) from exc
+
+
+@lru_cache
+def load_popular_packages() -> frozenset[str] | None:
+    """The popular-npm list, or None when the data file is missing (then
+    every new package goes to the model)."""
+    try:
+        text = POPULAR_PACKAGES_PATH.read_text()
+    except FileNotFoundError:
+        logger.warning("Popular npm list missing (%s); every new package goes to the LLM", POPULAR_PACKAGES_PATH)
+        return None
+    names = {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
+    return frozenset(names)
+
+
+def _within_distance(a: str, b: str, limit: int) -> bool:
+    """Levenshtein distance(a, b) <= limit. Banded: only cells within
+    `limit` of the diagonal can stay under the limit, so each row costs
+    O(limit) instead of O(len(b))."""
+    if abs(len(a) - len(b)) > limit:
+        return False
+    big = limit + 1
+    previous = {j: j for j in range(0, min(len(b), limit) + 1)}
+    for i in range(1, len(a) + 1):
+        current: dict[int, int] = {}
+        for j in range(max(0, i - limit), min(len(b), i + limit) + 1):
+            if j == 0:
+                current[j] = i
+                continue
+            current[j] = min(
+                previous.get(j, big) + 1,
+                current.get(j - 1, big) + 1,
+                previous.get(j - 1, big) + (a[i - 1] != b[j - 1]),
+            )
+        if min(current.values()) > limit:
+            return False
+        previous = current
+    return previous.get(len(b), big) <= limit
+
+
+@lru_cache(maxsize=4)
+def _names_by_length(popular: frozenset[str]) -> dict[int, tuple[str, ...]]:
+    by_length: dict[int, list[str]] = {}
+    for name in popular:
+        by_length.setdefault(len(name), []).append(name)
+    return {length: tuple(names) for length, names in by_length.items()}
+
+
+def _near_popular_name(name: str, popular: frozenset[str]) -> bool:
+    by_length = _names_by_length(popular)
+    return any(
+        _within_distance(name, other, TYPOSQUAT_MAX_DISTANCE)
+        for length in range(len(name) - TYPOSQUAT_MAX_DISTANCE, len(name) + TYPOSQUAT_MAX_DISTANCE + 1)
+        for other in by_length.get(length, ())
+    )
+
+
+def needs_llm_review(pkg: PackageRef, publish_age_days: float | None, popular: frozenset[str] | None,
+                     fresh_days: int) -> bool:
+    """The phase-2 prefilter (audit P1-11)."""
+    if pkg.previous_version is not None:
+        return False  # a version bump of a dependency the repo already had
+    if popular is None:
+        return True  # no list to compare against: check rather than skip
+    if publish_age_days is not None and publish_age_days < fresh_days:
+        return True
+    if pkg.name in popular:
+        return False
+    return _near_popular_name(pkg.name, popular)
 
 
 async def _process_package(
-    client: httpx.AsyncClient, settings, name: str, version: str
-) -> list[Finding]:
+    client: httpx.AsyncClient, settings, name: str, version: str, limit: asyncio.Semaphore | None = None,
+) -> tuple[list[Finding], float | None]:
     """
-    Everything for one package@version — phase 1 (OSV), phase 1.5 (publish
-    age), phase 2 (LLM slopsquat check). These three stay sequential within
-    a package (phase 2 needs phase 1.5's result to ground its prompt), but
-    the caller runs this whole function concurrently across packages.
+    Phases 1 and 1.5 for one package@version — the deterministic part.
+    Returns (findings, publish_age_days); the caller decides from the age
+    whether the package also goes to the batched phase 2. Every OSV and npm
+    call holds the shared semaphore (audit P1-11).
     """
-    findings = await _phase1_deterministic_registry_check(client, name, version)
-
-    publish_age_days = await _fetch_publish_age_days(client, name, version)
+    limit = limit or asyncio.Semaphore(REGISTRY_CONCURRENCY)
+    async with limit:
+        findings = await _phase1_deterministic_registry_check(client, name, version)
+    async with limit:
+        publish_age_days = await _fetch_publish_age_days(client, name, version)
     if publish_age_days is not None and publish_age_days < settings.slopsquat_fresh_package_days:
         findings.append(
             Finding(
@@ -144,11 +237,10 @@ async def _process_package(
                     f"dependencies are a common slopsquat/supply-chain vector"
                 ),
                 severity="medium",
+                severity_floor="medium",  # registry fact, not model judgment (audit P1-3)
             )
         )
-
-    findings += await _phase2_semantic_slopsquat_check(name, publish_age_days)
-    return findings
+    return findings, publish_age_days
 
 
 async def agent_2c_security(state: ReviewState) -> dict:
@@ -156,20 +248,34 @@ async def agent_2c_security(state: ReviewState) -> dict:
 
     # Dedupe (name, version) pairs — a lockfile bump can list the same
     # exact pin more than once across workspaces; there's no reason to
-    # hit OSV/npm/the LLM twice for an identical package@version.
-    changed_packages = list({
-        (pkg.name, pkg.version) for pkg in state.ast_payload.changed_packages
-    })
+    # hit OSV/npm twice for an identical package@version.
+    packages: dict[tuple[str, str], PackageRef] = {}
+    for pkg in state.ast_payload.changed_packages:
+        packages.setdefault((pkg.name, pkg.version), pkg)
 
+    limit = asyncio.Semaphore(REGISTRY_CONCURRENCY)
     async with httpx.AsyncClient() as client:
-        # Packages are independent of each other — run them concurrently
-        # rather than one at a time. httpx.AsyncClient is documented safe
-        # for concurrent use from many in-flight coroutines (same pattern
-        # as app/services/llm_client.py's shared AsyncGroq client).
-        per_package_findings = await asyncio.gather(*(
-            _process_package(client, settings, name, version)
-            for name, version in changed_packages
+        per_package = await asyncio.gather(*(
+            _process_package(client, settings, name, version, limit) for name, version in packages
         ))
 
-    findings = [f for package_findings in per_package_findings for f in package_findings]
-    return {"findings": findings}
+    findings = [f for package_findings, _ in per_package for f in package_findings]
+    def prefilter() -> list[tuple[str, float | None]]:
+        popular = load_popular_packages()
+        return [
+            (pkg.name, age)
+            for pkg, (_, age) in zip(packages.values(), per_package)
+            if needs_llm_review(pkg, age, popular, settings.slopsquat_fresh_package_days)
+        ]
+
+    # CPU work over a 5,000-name list: off the event loop (audit P1-7).
+    candidates = await asyncio.to_thread(prefilter)
+
+    result: dict = {"findings": findings}
+    if candidates:
+        try:
+            result["findings"] = findings + await _phase2_semantic_slopsquat_check(candidates)
+        except Phase2Failed:
+            # Keep the deterministic phase-1/1.5 findings; report the gap.
+            result["agent_errors"] = ["agent_2c_security"]
+    return result

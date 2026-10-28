@@ -18,6 +18,7 @@ one of them, even multiple times within the same review run.
 """
 import logging
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from github import Auth, GithubIntegration
 
@@ -27,6 +28,22 @@ from app.services.redis_client import get_sync_redis
 logger = logging.getLogger(__name__)
 
 _TOKEN_REFRESH_MARGIN_SECONDS = 300  # refresh if less than 5 min would remain
+
+# First line of Ignition's one review comment per PR (audit P1-8). Only a
+# comment that starts with this AND is authored by the App's bot user is
+# ever edited, so nobody can make Ignition overwrite their own comment.
+STICKY_MARKER = "<!-- ignition:review -->"
+SUGGESTIONS_MARKER = "<!-- ignition:suggestions -->"
+
+
+@lru_cache
+def _app_slug() -> str:
+    settings = get_settings()
+    if settings.github_app_slug:
+        return settings.github_app_slug
+    # GET /app with the App's JWT; once per process.
+    auth = Auth.AppAuth(app_id=settings.github_app_id, private_key=settings.github_private_key)
+    return GithubIntegration(auth=auth).get_app().slug
 
 
 def _cache_key(installation_id: int) -> str:
@@ -41,6 +58,7 @@ class GitHubClient:
         cached_token = redis.get(cache_key)
         if cached_token:
             logger.info("Reused cached installation token", extra={"installation_id": installation_id})
+            self._token = cached_token
             self._client = self._build_github(cached_token)
             return
 
@@ -68,7 +86,57 @@ class GitHubClient:
             "installation_id": installation_id, "cached_ttl_seconds": max(ttl_seconds, 0),
         })
 
+        self._token = token
         self._client = self._build_github(token)
+
+    @property
+    def installation_token(self) -> str:
+        """Short-lived (1h) installation token, scoped to this App's
+        permissions on this installation's repos. Handed to the AST analyzer
+        so it can clone private repos (audit P0-8). Never log it."""
+        return self._token
+
+    @property
+    def bot_login(self) -> str:
+        """The login GitHub shows on comments this App posts."""
+        return f"{_app_slug()}[bot]"
+
+    def get_pr_head_sha(self, repo_full_name: str, pr_number: int) -> str:
+        """The PR's current head commit — compared against the SHA a review
+        was started for, to skip superseded reviews (audit P1-8)."""
+        return self._client.get_repo(repo_full_name).get_pull(pr_number).head.sha
+
+    def upsert_sticky_comment(self, repo_full_name: str, pr_number: int, body: str, bot_login: str) -> dict:
+        """One Ignition comment per PR (audit P1-8): edit ours if it exists,
+        create it otherwise. A retried or repeated post is an edit, never a
+        duplicate."""
+        issue = self._client.get_repo(repo_full_name).get_issue(pr_number)
+        body = f"{STICKY_MARKER}\n{body}"
+        for comment in issue.get_comments():
+            if comment.user.login == bot_login and (comment.body or "").startswith(STICKY_MARKER):
+                comment.edit(body)
+                logger.info("GitHub review comment updated", extra={
+                    "repo_full_name": repo_full_name, "pr_number": pr_number,
+                    "comment_id": comment.raw_data.get("id"), "comment_url": comment.raw_data.get("html_url"),
+                })
+                return comment.raw_data
+        created = issue.create_comment(body)
+        logger.info("GitHub review comment posted", extra={
+            "repo_full_name": repo_full_name, "pr_number": pr_number,
+            "comment_id": created.raw_data.get("id"), "comment_url": created.raw_data.get("html_url"),
+        })
+        return created.raw_data
+
+    def create_check_run(self, repo: str, head_sha: str) -> int:
+        """The "Ignition" check run for this head commit (audit P0-6)."""
+        return self._client.get_repo(repo).create_check_run(name="Ignition", head_sha=head_sha, status="queued").id
+
+    def complete_check_run(self, repo: str, check_run_id: int, conclusion: str, title: str, summary: str,
+                           details_url: str | None = None) -> None:
+        run = self._client.get_repo(repo).get_check_run(check_run_id)
+        kwargs = {"details_url": details_url} if details_url else {}
+        run.edit(status="completed", conclusion=conclusion,
+                 output={"title": title[:255], "summary": summary[:65000]}, **kwargs)
 
     @staticmethod
     def _build_github(token: str):
@@ -91,19 +159,22 @@ class GitHubClient:
         })
         return comment.raw_data
 
-    def post_inline_suggestion(
-        self, repo_full_name: str, pr_number: int, file_path: str, line: int, patch: str
-    ) -> None:
-        """Posts an auto-fix suggestion as an inline review comment."""
+    def post_suggestion_review(self, repo_full_name: str, pr_number: int, head_sha: str, body: str,
+                               comments: list[dict], bot_login: str) -> bool:
+        """All of a review's auto-fix suggestions as ONE COMMENT review on the
+        head commit (P2 auto-fix), at most once per head SHA: False, and
+        nothing posted, if Ignition already left its suggestion review on
+        that commit. `comments` are {path, line, side, body} on added lines."""
         repo = self._client.get_repo(repo_full_name)
         pr = repo.get_pull(pr_number)
-        commit = repo.get_commit(pr.head.sha)
-        pr.create_review_comment(
-            body=f"```suggestion\n{patch}\n```",
-            commit=commit,
-            path=file_path,
-            line=line,
-        )
+        head_sha = head_sha or pr.head.sha
+        for review in pr.get_reviews():
+            if (review.user and review.user.login == bot_login and review.commit_id == head_sha
+                    and (review.body or "").startswith(SUGGESTIONS_MARKER)):
+                return False
+        pr.create_review(commit=repo.get_commit(head_sha), event="COMMENT",
+                         body=f"{SUGGESTIONS_MARKER}\n{body}", comments=comments)
+        return True
 
     def get_pr_diff(self, repo_full_name: str, pr_number: int) -> str:
         """

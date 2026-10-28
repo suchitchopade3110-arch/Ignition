@@ -1,25 +1,3 @@
-# sentence-transformers (below) pulls in torch as a transitive dependency.
-# This service runs CPU-only — the embedding model here is a small
-# sentence-transformer used for RAG similarity search (app/rag/
-# vector_store.py), never anything GPU-bound — but PyPI's default `torch`
-# wheel bundles the full CUDA toolkit as separate `nvidia-*` packages
-# (~3-5GB across ~15 packages: cublas, cudnn, cusolver, nccl, etc.), none
-# of which this process will ever load. That bloat turns into a real
-# problem on a PaaS build (Render, Railway, etc.): multi-GB image pulls,
-# slow builds, and on cheaper plans, a real chance of hitting a disk quota.
-# The extra index below serves torch's CPU-only wheels instead — same
-# API, no CUDA payload. Requires regenerating requirements.txt from a
-# network context that can actually reach download.pytorch.org (this
-# repo's CI runners can; some sandboxed dev environments can't) via:
-#   uv pip compile --generate-hashes --output-file=requirements.txt requirements.in
-# After regenerating, grep the result for `^nvidia-` — if anything still
-# matches, the resolver picked the CUDA build off PyPI instead of the CPU
-# build off the extra index (pip/uv don't strictly prioritize one index
-# over another for a same-named, same-version package), and torch needs
-# an explicit `==<version>+cpu` pin here to force it.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.13.0
-
 fastapi>=0.115
 uvicorn[standard]>=0.30
 langgraph>=0.2
@@ -31,10 +9,28 @@ pgvector>=0.3
 python-dotenv>=1.2.3
 tenacity>=8.3
 groq>=0.11
-pytest>=8.0
-pytest-asyncio>=0.24
-sentence-transformers>=3.0
+# Embedder for RAG similarity search (app/rag/vector_store.py): the same
+# sentence-transformers/all-MiniLM-L6-v2 model on ONNX Runtime, CPU only,
+# instead of sentence-transformers + torch and its CUDA wheels (I-1, I-2).
+# Pinned to a release at least two weeks old; bump deliberately. Exception:
+# 0.9.1 (4 days old) is the first that allows pillow 13, which fixes 38
+# advisories pip-audit flags on pillow 12 (I-12).
+fastembed==0.9.1
 arq>=0.28
 redis>=5.0
 slowapi>=0.1.9
 prometheus-client>=0.20
+# Floors for advisories fixed upstream (solutions doc, "Dependency fixes"),
+# so the resolver can never drop back to a vulnerable release. pyjwt is
+# pulled in by PyGithub/supabase, urllib3 by requests.
+pyjwt>=2.15.0
+urllib3>=2.8.0
+# multidict's fix (PYSEC-2026-4244) is in 6.9.1; stay in major 6.
+multidict>=6.9.1,<7
+# Encrypts users' GitHub tokens at rest (audit P1-1, MultiFernet). Already
+# installed through pyjwt[crypto]; listed because app code imports it.
+cryptography>=46
+# Parses the reviewed repo's ignition.boundaries.yaml (audit P1-10,
+# yaml.safe_load). Already installed transitively; listed because app code
+# imports it.
+pyyaml>=6.0

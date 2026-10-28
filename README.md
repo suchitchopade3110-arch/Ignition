@@ -63,7 +63,7 @@ The Auto-Fix step only runs on the path that finalizes a review — it's skipped
 
 **It doesn't panic and generalize.** Each agent owns one lane — architecture, logic/performance, or security — and stays in it. No context dilution, no superficial "looks fine to me" pass.
 
-**It doesn't just trust itself.** Every finding is checked against your actual code before it's shown to you — a claim that references something that doesn't exist never reaches you. Only findings that violate a declared architecture rule (`ignition.boundaries.yaml`) are labeled **Fact-checked**; everything else is labeled **Contextual** so the dashboard never claims more certainty than the pipeline actually proved.
+**It doesn't just trust itself.** Every finding is checked against your actual code before it's shown to you — a claim that references something that doesn't exist never reaches you. Only findings that violate a declared architecture rule (an `ignition.boundaries.yaml` in your repo's root, read at the PR's base commit so a PR can't loosen its own rules; copy [the example](docs/examples/ignition.boundaries.yaml) to start) are labeled **Fact-checked**; everything else is labeled **Contextual** so the dashboard never claims more certainty than the pipeline actually proved.
 
 **It doesn't cost more the longer it's unsure.** Retries are capped. If verification stalls, the system flags it for a human instead of burning through your API budget trying to convince itself.
 
@@ -168,6 +168,7 @@ cd Ignition
 
 # Python backend
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # pytest, only needed to run tests/
 cp .env.example .env   # bring your own credentials — never commit this file
 
 # AST analysis service
@@ -182,6 +183,7 @@ You'll need your own GitHub App, a Supabase project, and an LLM API key to actua
 ```bash
 pip install uv
 uv pip compile --generate-hashes --output-file=requirements.txt requirements.in
+uv pip compile --generate-hashes --output-file=requirements-dev.txt requirements-dev.in
 ```
 
 ```bash
@@ -196,8 +198,8 @@ uvicorn app.main:app --reload
 
 ```
 Ignition/
-├── ignition.boundaries.yaml # Declared layer boundaries — the deterministic gate's
-│                             # source of truth for what counts as a real architecture violation
+├── docs/examples/ignition.boundaries.yaml # Example layer-boundary spec; customers put
+│                             # their own in their repo root (read at the PR's base commit)
 ├── app/
 │   ├── main.py            # FastAPI entrypoint, webhook handling, SSE streaming
 │   ├── graph/              # The LangGraph state machine: nodes, routing, scoring

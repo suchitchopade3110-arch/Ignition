@@ -18,15 +18,32 @@ Set RATE_LIMIT_STORAGE_URI to a real redis:// URL once backend replicas
 > 1 so limits are shared across instances instead of each instance
 enforcing its own separate budget.
 """
+import hashlib
+
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from starlette.requests import Request
 
 from app.config import get_settings
 
 _settings = get_settings()
 
+
+def rate_limit_key(request: Request) -> str:
+    """Per-session bucket, client IP only as the fallback (I-6). After P0-5
+    every browser request reaches this service from the Next.js server, so
+    an IP key would put every user in one bucket. The session id is hashed
+    so it never becomes a storage key. The IP is the real client's because
+    uvicorn runs with --proxy-headers --forwarded-allow-ips=* (Render web
+    services are only reachable through Render's proxy)."""
+    session_id = request.cookies.get(get_settings().session_cookie_name)
+    if session_id:
+        return "s:" + hashlib.sha256(session_id.encode()).hexdigest()[:16]
+    return get_remote_address(request)
+
+
 limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=rate_limit_key,
     storage_uri=_settings.rate_limit_storage_uri,
     default_limits=[_settings.default_rate_limit],
 )

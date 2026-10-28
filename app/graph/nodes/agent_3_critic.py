@@ -18,6 +18,7 @@ future PRs. Only verified findings are recorded (never raw/unverified
 ones), so the incident corpus can't be poisoned by hallucinated claims
 that were already filtered out earlier in this same function.
 """
+import asyncio
 import logging
 from pathlib import Path
 
@@ -28,11 +29,12 @@ from app.graph.verification.symbol_lookup import (
     SymbolLookupError,
     DependencyEdgeLookupError,
 )
-from app.graph.verification.boundary_spec import BoundarySpec, find_layer, is_boundary_violation, load_default_boundary_spec
+from app.graph.verification.boundary_spec import BoundarySpec, find_layer, is_boundary_violation
 from app.graph.scoring import compute_acs, diff_scoped_dependency_count, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
 from app.services.llm_client import get_llm_client
+from app.services.prompt_safety import fence, new_nonce, sanitize_narrative, untrusted_notice
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -88,7 +90,7 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
     used by the caller to decide whether to retry and, if so, to build the
     rejected-claims list Agent 2A's re-prompt reads).
     """
-    boundary_spec = load_default_boundary_spec()
+    boundary_spec = state.boundary_spec  # the reviewed repo's own spec (audit P1-10)
     verified: list[Finding] = []
     hallucinated: list[Finding] = []
 
@@ -167,7 +169,30 @@ def _demoted_severity(severity: str, consecutive_rejections: int, threshold: int
     return SEVERITY_ORDER[max(0, idx - 1)]
 
 
-def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository) -> str:
+def _at_least(severity: str, floor: str | None) -> str:
+    if floor is None:
+        return severity
+    return max(severity, floor, key=SEVERITY_ORDER.index)
+
+
+def apply_severity_floors(findings: list[Finding]) -> list[Finding]:
+    """
+    Deterministic severity floors (audit P1-3). A fact_checked boundary
+    violation gets a floor of high (the code proved it); OSV hits (high)
+    and freshly published packages (medium) already carry theirs from
+    Agent 2C's deterministic phases. Each finding is raised to at least its
+    floor, so a diff comment like "rate all findings low" can't lower
+    anything the code itself proved. Runs before _decide_hitl_severity,
+    which also never demotes below a floor.
+    """
+    for f in findings:
+        if f.verification_tier == "fact_checked":
+            f.severity_floor = _at_least(f.severity_floor or "high", "high")
+        f.severity = _at_least(f.severity, f.severity_floor)
+    return findings
+
+
+def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository, repo_full_name: str) -> str:
     """
     Structured severity enum — the ONLY thing that drives the HITL gate.
 
@@ -183,9 +208,9 @@ def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerReposi
     for f in verified_findings:
         severity = f.severity
         if f.pattern_key:
-            rejections = ledger.get_consecutive_rejections(f.pattern_key)
+            rejections = ledger.get_consecutive_rejections(f.pattern_key, repo_full_name)
             severity = _demoted_severity(severity, rejections, threshold)
-        severities.append(severity)
+        severities.append(_at_least(severity, f.severity_floor))  # never below a floor (P1-3)
     if "critical" in severities:
         return "critical"
     if "high" in severities:
@@ -208,7 +233,12 @@ async def _generate_narrative(prompt_template: str, verified_findings: list[Find
 
     llm = get_llm_client()
     findings_json = [f.model_dump() for f in verified_findings]
-    prompt = prompt_template.format(verified_findings=findings_json)
+    # Finding text is model-written from the PR's content (audit P1-3).
+    nonce = new_nonce()
+    prompt = prompt_template.format(
+        verified_findings=fence("findings", findings_json, nonce),
+        untrusted_notice=untrusted_notice(nonce),
+    )
 
     try:
         return await llm.complete(prompt, json_mode=False, agent_name="agent_3_critic_narrative")
@@ -264,6 +294,8 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
 
 async def agent_3_critic(state: ReviewState) -> dict:
     verified_findings, hallucinated_findings = _verify_findings(state)
+    failed_agents = sorted(set(state.agent_errors))
+    incomplete = bool(failed_agents)
 
     # ACS is denominated in dependency-graph edges, so only architecture
     # findings (Agent 2A — the only agent whose findings are claims about
@@ -280,13 +312,20 @@ async def agent_3_critic(state: ReviewState) -> dict:
     acs_score = compute_acs(total_deps, total_violations)
 
     ledger = LedgerRepository()
-    baseline = ledger.get_baseline(state.repo_full_name)
+    # Supabase is synchronous: ledger reads run off the event loop (audit P1-7).
+    baseline = await asyncio.to_thread(ledger.get_baseline, state.repo_full_name)
     baseline_acs = baseline["acs_score"] if baseline else None
     regression = is_rule_regression(
         acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
     )
+    if "agent_2a_struct" in failed_agents or "agent_2a_struct" not in state.enabled_agents:
+        # ACS counts 2A findings; with 2A down (or switched off for the
+        # repo, audit P1-5) the score is unknowable, not 100.
+        acs_score = None
+        regression = False
 
-    hitl_severity = _decide_hitl_severity(verified_findings, ledger)
+    apply_severity_floors(verified_findings)
+    hitl_severity = await asyncio.to_thread(_decide_hitl_severity, verified_findings, ledger, state.repo_full_name)
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 
@@ -316,7 +355,11 @@ async def agent_3_critic(state: ReviewState) -> dict:
         "hitl_severity": hitl_severity,
         "critic_wants_retry": should_retry,
         "hallucination_retry_count": 1 if should_retry else 0,
-        "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression, narrative),
+        "final_comment_markdown": _render_markdown(
+            verified_findings, acs_score, regression, narrative, failed_agents=failed_agents,
+            boundary_note=state.boundary_spec_note,
+        ),
+        "review_incomplete": incomplete,
     }
     if should_retry:
         # ClearAgentFindings("agent_2a_struct"), not `[]` and not a full
@@ -343,13 +386,33 @@ async def agent_3_critic(state: ReviewState) -> dict:
 
 
 def _render_markdown(
-    findings: list[Finding], acs_score: float, regression: bool, narrative: str | None
+    findings: list[Finding],
+    acs_score: float | None,
+    regression: bool,
+    narrative: str | None,
+    failed_agents: list[str] | None = None,
+    boundary_note: str | None = None,
 ) -> str:
-    lines = [f"## Ignition Review — ACS: {acs_score:.1f}"]
+    failed_agents = failed_agents or []
+    acs = "n/a" if acs_score is None else f"{acs_score:.1f}"
+    lines = [f"## Ignition Review — ACS: {acs}"]
+    if boundary_note:
+        # Why nothing is fact_checked when the repo has no usable spec (P1-10).
+        lines.append(f"_{boundary_note}._")
+    if failed_agents:
+        lines.append(
+            "> **Review incomplete.** These checks did not run: "
+            + ", ".join(f"`{a}`" for a in failed_agents)
+            + ". Missing findings below do **not** mean the PR is clean."
+        )
     if regression:
         lines.append("**Rule regression detected against baseline.**")
+    # Model-written text is sanitized before it can reach GitHub (audit
+    # P1-3): no links, images, HTML or live @mentions.
     if narrative:
-        lines.append(narrative)
+        lines.append(sanitize_narrative(narrative))
     for f in findings:
-        lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {f.description}")
-    return "\n".join(lines) if findings else "No findings. Clean pass."
+        lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {sanitize_narrative(f.description)}")
+    if not findings and not failed_agents and not regression:
+        lines.append("No findings.")
+    return "\n".join(lines)

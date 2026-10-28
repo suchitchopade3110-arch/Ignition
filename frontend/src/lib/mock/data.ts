@@ -143,7 +143,7 @@ export const mockReviewDetail: ReviewDetail = {
   ],
   findings: [],
   diffs: [],
-  githubCommentPreview: "### AI Code Review Report\nAnalysis in progress...",
+  finalCommentMarkdown: "## Ignition Review — ACS: 88.0\nAnalysis in progress...",
 }
 
 export const mockHitlPending: HitlItem[] = [

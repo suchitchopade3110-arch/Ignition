@@ -1,10 +1,11 @@
 """
 Shared JSON-to-Finding parsing for all four LLM-backed agent nodes.
 
-Deliberately fails soft: a malformed or unexpected LLM response results in
-an empty findings list for that agent, not a crashed graph run. Losing one
-agent's findings for a single PR is recoverable; taking down the whole
-review pipeline on a JSON parsing error is not.
+A response that isn't a findings document at all (not JSON, or JSON that
+isn't an object/list) raises FindingsParseError: the calling agent reports
+itself as failed and the review is marked incomplete, instead of the old
+fail-soft [] that read as "clean" (audit P0-1). One malformed finding
+inside an otherwise valid document is still skipped on its own.
 """
 import json
 import logging
@@ -14,12 +15,20 @@ from app.graph.state import Finding
 logger = logging.getLogger(__name__)
 
 
+class FindingsParseError(ValueError):
+    """The model's response wasn't a findings document at all. Raised (not
+    swallowed into []) so the calling agent reports itself as failed and
+    the review is marked incomplete instead of 'clean' (audit P0-1)."""
+
+
 def parse_findings_json(raw: str, agent_name: str) -> list[Finding]:
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("agent=%s returned non-JSON response, treating as no findings", agent_name)
-        return []
+    except json.JSONDecodeError as exc:
+        logger.warning("agent=%s returned non-JSON response", agent_name)
+        raise FindingsParseError(f"{agent_name}: response was not JSON") from exc
+    if not isinstance(data, (list, dict)):
+        raise FindingsParseError(f"{agent_name}: response JSON was {type(data).__name__}, not an object/list")
 
     # Models sometimes wrap the array in an object (e.g. {"findings": [...]})
     # despite instructions — accept both shapes rather than being brittle.

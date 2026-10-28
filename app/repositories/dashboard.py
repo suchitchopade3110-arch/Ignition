@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import collections
@@ -14,7 +14,7 @@ class ReviewRepository:
         self._db = get_supabase()
 
     def create_review(self, review_id: str, repo_full_name: str, pr_number: int, title: str, author: str, branch: str, commit_sha: str, installation_id: int | None = None, correlation_id: str | None = None) -> dict:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat()
         row = {
             "id": review_id,
             "repo_full_name": repo_full_name,
@@ -61,19 +61,41 @@ class ReviewRepository:
         """
         res = (
             self._db.table(self.TABLE)
-            .select("repo_full_name, installation_id, pr_number, final_comment_markdown, correlation_id")
+            .select("repo_full_name, installation_id, pr_number, final_comment_markdown, correlation_id, commit_sha")
             .eq("id", review_id)
             .execute()
         )
         return res.data[0] if res.data else None
 
+    def get_last_completed_acs(self, repo_full_name: str, pr_number: int) -> float | None:
+        """The ACS of this PR's most recent completed review that has one
+        (audit P0-7: the merge baseline). A review whose 2A agent failed has
+        no ACS (P0-1) and is skipped."""
+        res = (
+            self._db.table(self.TABLE)
+            .select("acs_score")
+            .eq("repo_full_name", repo_full_name)
+            .eq("pr_number", pr_number)
+            .eq("status", "completed")
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+        return next((float(r["acs_score"]) for r in res.data or [] if r.get("acs_score") is not None), None)
+
+    def get_check_run_id(self, review_id: str) -> int | None:
+        """The review's GitHub check run (audit P0-6), or None if the webhook
+        couldn't create one."""
+        res = self._db.table(self.TABLE).select("check_run_id").eq("id", review_id).execute()
+        return res.data[0].get("check_run_id") if res.data else None
+
     def update_review(self, review_id: str, updates: dict) -> dict:
         # If status changes to completed/failed, set completed_at
-        if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled"):
-            updates["completed_at"] = datetime.utcnow().isoformat() + "Z"
+        if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting"):
+            updates["completed_at"] = datetime.now(timezone.utc).isoformat()
         
         # Calculate duration if completed_at is set
-        if "completed_at" in updates or ("status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled")):
+        if "completed_at" in updates or ("status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting")):
             review = self.get_review(review_id)
             if review:
                 created_at_str = review.get("created_at")
@@ -81,8 +103,9 @@ class ReviewRepository:
                     try:
                         # strip Z or offset
                         created_dt = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-                        completed_dt = datetime.utcnow()
-                        delta = completed_dt - created_dt.replace(tzinfo=None)
+                        if created_dt.tzinfo is None:  # a naive stamp is UTC
+                            created_dt = created_dt.replace(tzinfo=timezone.utc)
+                        delta = datetime.now(timezone.utc) - created_dt
                         seconds = int(delta.total_seconds())
                         if seconds < 60:
                             updates["duration"] = f"{seconds}s"
@@ -124,15 +147,36 @@ class ReviewRepository:
             "agents": row.get("agents") or [],
             "findings": row.get("findings") or [],
             "diffs": row.get("diffs") or [],
-            "github_comment_preview": row.get("github_comment_preview")
+            "github_comment_preview": row.get("github_comment_preview"),
+            "final_comment_markdown": row.get("final_comment_markdown"),
+            # Why a review ended the way it did (incomplete, superseded, timed
+            # out, ...); approve_hitl reads it to conclude the check run.
+            "status_reason": row.get("status_reason"),
         }
 
+    # Columns each read needs (I-10): never "*", which drags every review's
+    # raw diff_text (and, for lists, the per-file diffs JSON) along.
+    LIST_COLUMNS = (
+        "id, repo_full_name, pr_number, title, status, severity, findings_count, created_at, completed_at, "
+        "duration, acs_score, author, branch, commit_sha, previous_acs_score, regression, status_reason"
+    )
+    HITL_COLUMNS = LIST_COLUMNS + ", findings, agents, final_comment_markdown, hitl_severity"
+    DETAIL_COLUMNS = LIST_COLUMNS + ", findings, agents, diffs, github_comment_preview, final_comment_markdown"
+    LEDGER_COLUMNS = "status, acs_score, verified_findings, regression, created_at"
+
     def get_review(self, review_id: str) -> dict | None:
-        res = self._db.table(self.TABLE).select("*").eq("id", review_id).execute()
+        res = self._db.table(self.TABLE).select(self.DETAIL_COLUMNS).eq("id", review_id).execute()
         return self._map_review_row(res.data[0]) if res.data else None
 
-    def list_reviews(self, repo_name: str = None, status: str = None, severity: str = None, page: int = 1, page_size: int = 25) -> tuple[list[dict], int]:
-        query = self._db.table(self.TABLE).select("*", count="exact")
+    def list_reviews(self, repo_name: str = None, status: str = None, severity: str = None, page: int = 1, page_size: int = 25,
+                     repo_names=None) -> tuple[list[dict], int]:
+        # repo_names: the caller's accessible repos (audit P0-4). Empty means
+        # nothing to show — return without querying.
+        if repo_names is not None and not repo_names:
+            return [], 0
+        query = self._db.table(self.TABLE).select(self.LIST_COLUMNS, count="exact")
+        if repo_names is not None:
+            query = query.in_("repo_full_name", sorted(repo_names))
         if repo_name:
             query = query.eq("repo_full_name", repo_name)
         if status:
@@ -148,32 +192,48 @@ class ReviewRepository:
         mapped_data = [self._map_review_row(row) for row in res.data]
         return mapped_data, total
 
-    def list_hitl_pending(self) -> list[dict]:
-        res = (
-            self._db.table(self.TABLE)
-            .select("*")
-            .eq("status", "waiting_hitl")
-            .order("created_at", desc=True)
-            .execute()
-        )
+    def list_hitl_pending(self, repo_names=None) -> list[dict]:
+        if repo_names is not None and not repo_names:
+            return []
+        query = self._db.table(self.TABLE).select(self.HITL_COLUMNS)
+        if repo_names is not None:
+            query = query.in_("repo_full_name", sorted(repo_names))
+        res = query.eq("status", "waiting_hitl").order("created_at", desc=True).execute()
         return [self._map_review_row(row) for row in res.data]
 
-    def get_stats(self) -> dict:
+    def _scoped(self, query, repo_names):
+        return query.in_("repo_full_name", sorted(repo_names)) if repo_names is not None else query
+
+    def get_stats(self, repo_names=None) -> dict:
+        if repo_names is not None and not repo_names:
+            return {"activeReviews": 0, "hitlPending": 0, "avgAcsScore": 0.0, "issuesFound": 0, "issuesFoundTrend": None}
+        if repo_names is not None:
+            # One SQL function instead of four row-scanning queries (I-10).
+            res = self._db.rpc("dashboard_stats", {"repo_names": sorted(repo_names)}).execute()
+            stats = res.data or {}
+            return {
+                "activeReviews": int(stats.get("activeReviews") or 0),
+                "hitlPending": int(stats.get("hitlPending") or 0),
+                "avgAcsScore": round(float(stats.get("avgAcsScore") or 0), 1),
+                "issuesFound": int(stats.get("issuesFound") or 0),
+                "issuesFoundTrend": self._issues_found_trend(repo_names),
+            }
+
         # activeReviews: status="running"
-        running_res = self._db.table(self.TABLE).select("id", count="exact").eq("status", "running").execute()
+        running_res = self._scoped(self._db.table(self.TABLE).select("id", count="exact"), repo_names).eq("status", "running").execute()
         active_reviews = running_res.count if running_res.count is not None else 0
 
         # hitlPending: status="waiting_hitl"
-        hitl_res = self._db.table(self.TABLE).select("id", count="exact").eq("status", "waiting_hitl").execute()
+        hitl_res = self._scoped(self._db.table(self.TABLE).select("id", count="exact"), repo_names).eq("status", "waiting_hitl").execute()
         hitl_pending = hitl_res.count if hitl_res.count is not None else 0
 
         # avgAcsScore: avg acs_score across completed reviews
-        completed_res = self._db.table(self.TABLE).select("acs_score").eq("status", "completed").execute()
+        completed_res = self._scoped(self._db.table(self.TABLE).select("acs_score"), repo_names).eq("status", "completed").execute()
         scores = [float(row["acs_score"]) for row in completed_res.data if row.get("acs_score") is not None]
         avg_acs_score = sum(scores) / len(scores) if scores else 0.0
 
         # issuesFound: sum of findings_count across reviews
-        findings_res = self._db.table(self.TABLE).select("findings_count").execute()
+        findings_res = self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names).execute()
         issues_found = sum(int(row["findings_count"]) for row in findings_res.data if row.get("findings_count") is not None)
 
         return {
@@ -181,10 +241,10 @@ class ReviewRepository:
             "hitlPending": hitl_pending,
             "avgAcsScore": round(avg_acs_score, 1),
             "issuesFound": issues_found,
-            "issuesFoundTrend": self._issues_found_trend(),
+            "issuesFoundTrend": self._issues_found_trend(repo_names),
         }
 
-    def _issues_found_trend(self) -> dict | None:
+    def _issues_found_trend(self, repo_names=None) -> dict | None:
         """
         Week-over-week change in issues found: sum(findings_count) for
         reviews created in the last 7 days vs the 7 days before that.
@@ -193,19 +253,17 @@ class ReviewRepository:
         a repo that just started using Ignition) — a fabricated number here
         is exactly the thing this field was added to stop doing.
         """
-        now = datetime.utcnow()
-        week_ago = (now - timedelta(days=7)).isoformat() + "Z"
-        two_weeks_ago = (now - timedelta(days=14)).isoformat() + "Z"
+        now = datetime.now(timezone.utc)
+        week_ago = (now - timedelta(days=7)).isoformat()
+        two_weeks_ago = (now - timedelta(days=14)).isoformat()
 
         recent_res = (
-            self._db.table(self.TABLE)
-            .select("findings_count")
+            self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names)
             .gte("created_at", week_ago)
             .execute()
         )
         prior_res = (
-            self._db.table(self.TABLE)
-            .select("findings_count")
+            self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names)
             .gte("created_at", two_weeks_ago)
             .lt("created_at", week_ago)
             .execute()
@@ -223,9 +281,14 @@ class ReviewRepository:
         pct_change = ((recent_total - prior_total) / prior_total) * 100
         return {"value": round(abs(pct_change), 1), "isPositive": pct_change >= 0}
 
+    def prune_old_diffs(self, older_than_days: int = 30) -> int:
+        """Retention (I-10): drops stored diffs from reviews older than
+        `older_than_days`; returns how many rows changed."""
+        res = self._db.rpc("prune_review_diffs", {"older_than_days": older_than_days}).execute()
+        return int(res.data or 0)
+
     def get_ledger_stats(self, repo_full_name: str) -> dict:
-        # Fetch reviews for repo
-        res = self._db.table(self.TABLE).select("*").eq("repo_full_name", repo_full_name).execute()
+        res = self._db.table(self.TABLE).select(self.LEDGER_COLUMNS).eq("repo_full_name", repo_full_name).execute()
         data = res.data or []
         
         completed = [r for r in data if r.get("status") in ("completed", "rejected") and r.get("acs_score") is not None]
@@ -255,7 +318,7 @@ class ReviewRepository:
         }
 
     def get_ledger_trend(self, repo_full_name: str) -> list[dict]:
-        res = self._db.table(self.TABLE).select("*").eq("repo_full_name", repo_full_name).execute()
+        res = self._db.table(self.TABLE).select(self.LEDGER_COLUMNS).eq("repo_full_name", repo_full_name).execute()
         data = res.data or []
         
         # Group by month (YYYY-MM)
@@ -300,85 +363,106 @@ class RepoRepository:
     def __init__(self):
         self._db = get_supabase()
 
-    def get_or_create_repo(self, repo_full_name: str) -> dict:
-        """
-        Atomic upsert, not check-then-insert: two concurrent webhooks for a
-        brand-new repo racing this function previously could both pass the
-        "doesn't exist yet" SELECT and both attempt an insert. `id` is
-        already a primary key (repositories_pkey, confirmed live), so the
-        loser's plain INSERT would raise a duplicate-key error — which the
-        old `except Exception: pass` silently swallowed, returning a
-        locally-constructed dict that was never actually verified against
-        what got persisted.
-
-        DO NOTHING (not DO UPDATE) is correct here: every field in `row` is
-        deterministically derived from repo_full_name, so there's nothing
-        meaningful to update on conflict — the first writer's row is fine,
-        we just need everyone else to no-op instead of erroring.
-        """
-        repo_id = repo_full_name.replace("/", "_")
+    def _by_owner_name(self, query, repo_full_name: str):
+        # Exact owner and name columns, never the derived owner_name id:
+        # acme_corp/api and acme/corp_api share that id (P2 repo IDs).
         owner, name = repo_full_name.split("/", 1)
-        row = {
-            "id": repo_id,
-            "name": name,
-            "owner": owner,
-            "language": "TypeScript",
-        }
+        return query.eq("owner", owner).eq("name", name)
+
+    def _repo_by_github_id(self, github_repo_id: int) -> dict | None:
+        res = self._db.table(self.TABLE).select("*").eq("github_repo_id", github_repo_id).execute()
+        return res.data[0] if res.data else None
+
+    def get_or_create_repo(self, repo_full_name: str, github_repo_id: int | None = None) -> dict:
+        """
+        The repo's row, keyed by GitHub's numeric repository id (P2 repo
+        IDs; migrations_020). In order:
+          1. a row with this github_repo_id (owner/name refreshed, so a
+             rename on GitHub follows through);
+          2. a legacy row for this owner/name from before migration 020:
+             adopted, so its saved settings keep applying;
+          3. a new row whose primary key is the numeric id, so two repos
+             whose owner_name forms collide never share a row.
+        Without a numeric id (old callers only) it falls back to the legacy
+        owner_name key.
+
+        The insert is an upsert with DO NOTHING, so two concurrent webhooks
+        for a brand-new repo don't race into a duplicate-key error; the
+        re-read returns whichever row won.
+        """
+        owner, name = repo_full_name.split("/", 1)
+        if github_repo_id is not None:
+            existing = self._repo_by_github_id(github_repo_id)
+            if existing is not None:
+                if (existing.get("owner"), existing.get("name")) != (owner, name):
+                    self._db.table(self.TABLE).update({"owner": owner, "name": name}).eq(
+                        "github_repo_id", github_repo_id).execute()
+                    existing = {**existing, "owner": owner, "name": name}
+                self.get_or_create_settings(github_repo_id)
+                return existing
+            legacy = self._by_owner_name(self._db.table(self.TABLE).select("*"), repo_full_name).is_(
+                "github_repo_id", "null").execute()
+            if legacy.data:
+                row_id = legacy.data[0]["id"]
+                self._db.table(self.TABLE).update({"github_repo_id": github_repo_id}).eq("id", row_id).execute()
+                self.get_or_create_settings(github_repo_id)
+                return self._repo_by_github_id(github_repo_id)
+
+        repo_id = str(github_repo_id) if github_repo_id is not None else repo_full_name.replace("/", "_")
+        row = {"id": repo_id, "name": name, "owner": owner, "language": "TypeScript"}
+        if github_repo_id is not None:
+            row["github_repo_id"] = github_repo_id
         try:
             self._db.table(self.TABLE).upsert(row, on_conflict="id", ignore_duplicates=True).execute()
         except APIError as e:
-            # ON CONFLICT DO NOTHING never raises for the race case itself —
-            # if something still lands here, it's a genuine, unexpected
-            # failure (bad connection, schema mismatch, etc.), not the race
-            # this fix targets. Log it instead of swallowing it.
+            # DO NOTHING never raises for the race itself; anything here is
+            # a real failure (connection, schema), so it isn't swallowed.
             logger.exception("Unexpected error upserting repo %s: %s", repo_full_name, e)
             raise
 
-        # Upsert with ignore_duplicates returns nothing for a row that lost
-        # the race (it wasn't touched), so re-read is the only way to get
-        # back the actually-persisted row regardless of who won.
         res = self._db.table(self.TABLE).select("*").eq("id", repo_id).execute()
         if not res.data:
             raise RuntimeError(f"Repo {repo_full_name} not found immediately after upsert")
-        persisted = res.data[0]
-
-        self.get_or_create_settings(repo_id, repo_full_name)
-        return persisted
+        if github_repo_id is not None:
+            self.get_or_create_settings(github_repo_id)
+        return res.data[0]
 
     def set_repo_installed(self, repo_full_name: str, installed: bool) -> None:
         """
         Driven by the "installation"/"installation_repositories" webhook
-        events (app/main.py::github_webhook) — previously those events were
-        acknowledged but not acted on at all. Deliberately update-only, not
-        upsert: an "installed" (repositories_removed) event for a repo this
-        app was never told about via a real pull_request webhook has no row
-        to update yet, and that's fine — nothing to mark uninstalled. A
-        fresh "added"/"created" event for a genuinely new repo goes through
-        get_or_create_repo first (which the webhook handler calls before
-        this), so the row exists by the time this runs for that case.
+        events. Update-only, not upsert: a removal for a repo this app never
+        saw has no row, and that's fine. An added repo goes through
+        get_or_create_repo first, so its row exists by the time this runs.
         """
-        repo_id = repo_full_name.replace("/", "_")
-        self._db.table(self.TABLE).update({"installed": installed}).eq("id", repo_id).execute()
+        self._by_owner_name(self._db.table(self.TABLE).update({"installed": installed}), repo_full_name).execute()
 
-    def list_repos(self) -> list[dict]:
-        repos_res = self._db.table(self.TABLE).select("*").execute()
+    def list_repos(self, repo_names=None) -> list[dict]:
+        if repo_names is not None and not repo_names:
+            return []
+        query = self._db.table(self.TABLE).select("id, github_repo_id, owner, name, language, installed")
+        if repo_names is not None:
+            # repositories has no repo_full_name column; narrow by owner,
+            # then keep only rows whose exact owner/name is in the set.
+            query = query.in_("owner", sorted({n.split("/", 1)[0] for n in repo_names}))
+        repos_res = query.execute()
         repos = repos_res.data or []
+        if repo_names is not None:
+            repos = [r for r in repos if f"{r['owner']}/{r['name']}" in repo_names]
         
+        # Every repo's latest review in one query (I-10), not one per repo.
+        names = sorted(f"{r['owner']}/{r['name']}" for r in repos)
+        latest_by_repo = {}
+        if names:
+            latest_res = self._db.rpc("latest_review_per_repo", {"repo_names": names}).execute()
+            latest_by_repo = {row["repo_full_name"]: row for row in latest_res.data or []}
+
         results = []
         for r in repos:
-            repo_id = r["id"]
+            # The numeric GitHub id is what the settings routes take (P2 repo
+            # IDs). A row the backfill hasn't reached yet keeps its legacy id.
+            repo_id = str(r["github_repo_id"]) if r.get("github_repo_id") is not None else r["id"]
             repo_full_name = f"{r['owner']}/{r['name']}"
-            
-            # Fetch latest review for status & acsScore
-            review_res = (
-                self._db.table("reviews")
-                .select("acs_score", "status", "created_at")
-                .eq("repo_full_name", repo_full_name)
-                .order("created_at", desc=True)
-                .limit(1)
-                .execute()
-            )
-            latest = review_res.data[0] if review_res.data else None
+            latest = latest_by_repo.get(repo_full_name)
             
             status = "healthy"
             acs_score = 100.0
@@ -408,38 +492,48 @@ class RepoRepository:
                 # `installed` column value cached here yet at the Python
                 # level if the DB migration hasn't run — default True
                 # matches the migration's own column default/backfill.
-                "installed": r.get("installed", True),
+                "installed": r.get("installed") if r.get("installed") is not None else True,
             })
         return results
 
-    def get_or_create_settings(self, repo_id: str, repo_full_name: str = None) -> dict:
-        res = self._db.table(self.SETTINGS_TABLE).select("*").eq("repo_id", repo_id).execute()
+    _SETTINGS_DEFAULTS = {
+        "enable_ai_review": True,
+        "enable_auto_fix": False,
+        "enable_hitl": True,
+        "security_scan": True,
+        "architecture_scan": True,
+        "logic_scan": True,
+    }
+
+    def get_or_create_settings(self, github_repo_id: int, repo_full_name: str | None = None) -> dict:
+        """
+        The repo's settings, looked up by GitHub's numeric repository id (P2
+        repo IDs). A repo with no settings row gets the defaults; a legacy
+        row (keyed only by repo_id) is adopted, so a saved choice survives.
+        With repo_full_name, a repo with no row at all is registered first.
+        """
+        res = self._db.table(self.SETTINGS_TABLE).select("*").eq("github_repo_id", github_repo_id).execute()
         if res.data:
             return res.data[0]
-            
-        row = {
-            "repo_id": repo_id,
-            "enable_ai_review": True,
-            "enable_auto_fix": False,
-            "enable_hitl": True,
-            "security_scan": True,
-            "architecture_scan": True,
-            "logic_scan": True
-        }
-        try:
-            self._db.table(self.SETTINGS_TABLE).insert(row).execute()
-        except Exception:
-            pass
-        return row
+        repo = self._repo_by_github_id(github_repo_id)
+        if repo is None:
+            if repo_full_name is None:
+                raise LookupError(f"No repository with github_repo_id {github_repo_id}")
+            self.get_or_create_repo(repo_full_name, github_repo_id=github_repo_id)
+            return self.get_or_create_settings(github_repo_id)
+        row = {"repo_id": repo["id"], "github_repo_id": github_repo_id, **self._SETTINGS_DEFAULTS}
+        self._db.table(self.SETTINGS_TABLE).upsert(row, on_conflict="repo_id", ignore_duplicates=True).execute()
+        self._db.table(self.SETTINGS_TABLE).update({"github_repo_id": github_repo_id}).eq(
+            "repo_id", repo["id"]).execute()
+        res = self._db.table(self.SETTINGS_TABLE).select("*").eq("github_repo_id", github_repo_id).execute()
+        return res.data[0] if res.data else row
 
-    def update_settings(self, repo_id: str, updates: dict) -> dict:
-        allowed = {
-            "enable_ai_review", "enable_auto_fix", "enable_hitl",
-            "security_scan", "architecture_scan", "logic_scan"
-        }
+    def update_settings(self, github_repo_id: int, updates: dict) -> dict:
+        allowed = set(self._SETTINGS_DEFAULTS)
         filtered = {k: v for k, v in updates.items() if k in allowed}
-        res = self._db.table(self.SETTINGS_TABLE).update(filtered).eq("repo_id", repo_id).execute()
-        return res.data[0] if res.data else self.get_or_create_settings(repo_id)
+        self.get_or_create_settings(github_repo_id)
+        res = self._db.table(self.SETTINGS_TABLE).update(filtered).eq("github_repo_id", github_repo_id).execute()
+        return res.data[0] if res.data else self.get_or_create_settings(github_repo_id)
 
     def update_repo_stats(self, repo_full_name: str, acs_score: float | None, last_review_at: str) -> None:
         """Called from the review pipeline's finalize_and_post step. Note
@@ -447,7 +541,6 @@ class RepoRepository:
         the reviews table and does not read these columns back — this is a
         write-only cache, kept for whatever later consumer wants a fast
         lookup without joining reviews."""
-        repo_id = repo_full_name.replace("/", "_")
-        self._db.table(self.TABLE).update(
+        self._by_owner_name(self._db.table(self.TABLE).update(
             {"acs_score": acs_score, "last_review_at": last_review_at}
-        ).eq("id", repo_id).execute()
+        ), repo_full_name).execute()

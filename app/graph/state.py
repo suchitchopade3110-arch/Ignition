@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Annotated, Literal
 import operator
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from app.graph.verification.boundary_spec import BoundarySpec, spec_from_payload
 from app.schemas.ast_payload import ASTAnalyzerPayload
 from app.schemas.github import PullRequestWebhook
 
@@ -53,6 +54,11 @@ class Finding(BaseModel):
     # review) so a pattern humans keep rejecting can be demoted; see
     # LedgerRepository.record_hitl_outcome / get_consecutive_rejections.
     pattern_key: str | None = None
+    # Lowest severity this finding may ever show or count as (audit P1-3).
+    # Set only by deterministic code (an OSV hit, a fresh npm publish, a
+    # fact_checked boundary violation), never from model output, so an
+    # instruction hidden in the diff can't talk a proven finding down.
+    severity_floor: Severity | None = None
 
 
 class ClearAgentFindings(list):
@@ -97,8 +103,33 @@ class ReviewState(BaseModel):
     repo_full_name: str
     pr_number: int
     installation_id: int
+    # The commit this review was started for; compared with the PR's live
+    # head before posting so a superseded review never posts (audit P1-8).
+    head_sha: str = ""
     diff_text: str = ""
     ast_payload: ASTAnalyzerPayload
+
+    # The repo's settings (audit P1-5), loaded by run_review_job before the
+    # graph starts; routing reads them. Defaults are "everything on" so a
+    # state built without settings behaves as before.
+    enabled_agents: list[str] = Field(
+        default_factory=lambda: ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]
+    )
+    enable_hitl: bool = True
+    enable_auto_fix: bool = True
+
+    # The reviewed repo's own boundary spec (audit P1-10), parsed once from
+    # ast_payload.boundary_spec_yaml (the file at the PR's base commit).
+    # agent_1_gate and the Critic read it from here. No usable file: an
+    # empty spec plus a note for the comment.
+    boundary_spec: BoundarySpec | None = None
+    boundary_spec_note: str | None = None
+
+    @model_validator(mode="after")
+    def _parse_boundary_spec(self) -> "ReviewState":
+        if self.boundary_spec is None:
+            self.boundary_spec, self.boundary_spec_note = spec_from_payload(self.ast_payload.boundary_spec_yaml)
+        return self
 
     # Written once by Agent 1
     hard_rule_violation: bool = False
@@ -106,6 +137,11 @@ class ReviewState(BaseModel):
 
     # Written in parallel by Sub-Graphs A/B/C — reducer required
     findings: Annotated[list[Finding], merge_findings] = Field(default_factory=list)
+
+    # Agents whose LLM call (or response parsing) failed this run. Non-empty
+    # means the review is INCOMPLETE: "no findings" can no longer be read as
+    # "clean" (audit P0-1). Additive reducer — 2A/2B/2C write in parallel.
+    agent_errors: Annotated[list[str], operator.add] = Field(default_factory=list)
 
     # Written by the Critic
     verified_findings: list[Finding] = Field(default_factory=list)
@@ -130,6 +166,13 @@ class ReviewState(BaseModel):
 
     # Terminal
     final_comment_markdown: str | None = None
+    review_incomplete: bool = False
+    # Set by finalize_and_post when the PR's head moved during the review.
+    superseded_by: str | None = None
+    # Set by finalize_and_post (P2 partial success): False when the summary
+    # could not be posted after retries. Auto-fix only runs after a posted
+    # summary.
+    comment_posted: bool | None = None
 
     # Set by agent_4_autofix — informational, not used in routing decisions
     autofix_posted: int = 0
@@ -141,5 +184,6 @@ class ReviewState(BaseModel):
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
             installation_id=event.installation.id,
+            head_sha=event.pull_request.head_sha,
             ast_payload=ast_payload,
         )

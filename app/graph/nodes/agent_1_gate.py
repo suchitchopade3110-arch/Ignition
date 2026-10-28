@@ -1,58 +1,25 @@
-import re
+"""
+Agent 1 — deterministic hard-rule gate. No LLM, no network.
 
+Two checks, both against the AST analyzer's diff-scoped output:
+  1. hard_rule_violations — the analyzer reports only violations on lines
+     this PR ADDED, found by walking real CallExpression nodes with import
+     bindings resolved (eval, child_process.exec/execSync incl. aliased and
+     destructured require). This replaced a substring scan of the diff text
+     that both over-fired (`retrieval(` contains `eval(`) and under-fired
+     (`const { exec } = require("child_process")`) — audit P1-9.
+  2. boundary-spec layer crossings on edges whose importing file changed.
+
+The diff text is NOT re-fetched here: review_pipeline already fetched it
+into state.diff_text, and re-fetching could overwrite it with "" on a
+GitHub hiccup, silently blinding every semantic agent (audit P2).
+"""
 from app.graph.state import ReviewState
-from app.graph.verification.boundary_spec import check_boundary_violations, load_default_boundary_spec
-from app.services.github_client import GitHubClient
-
-BANNED_IMPORT_PATTERNS = ["eval(", "child_process.exec("]
-
-# Strips out comments and string-literal contents so the banned-pattern scan
-# below only ever matches real code, not a pattern name mentioned in a
-# comment or a test fixture string. DOTALL so a `/* ... */` block comment
-# spanning multiple added diff lines (each still prefixed with its own `+`)
-# is matched as one token.
-_STRING_OR_COMMENT_RE = re.compile(
-    r"/\*.*?\*/"          # block comment
-    r"|//[^\n]*"          # line comment
-    r'|"(?:[^"\\\n]|\\.)*"'   # double-quoted string
-    r"|'(?:[^'\\\n]|\\.)*'"   # single-quoted string
-    r"|`(?:[^`\\]|\\.)*`",    # template literal
-    re.DOTALL,
-)
+from app.graph.verification.boundary_spec import check_boundary_violations
 
 
-def _strip_comments_and_strings(code: str) -> str:
-    return _STRING_OR_COMMENT_RE.sub(" ", code)
-
-
-def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
+def agent_1_gate(state: ReviewState) -> dict:
     violations = list(state.ast_payload.hard_rule_violations)
-
-    diff_text = ""
-    try:
-        if diff_fetcher is None:
-            client = GitHubClient(installation_id=state.installation_id)
-            diff_text = client.get_pr_diff(state.repo_full_name, state.pr_number)
-        else:
-            diff_text = diff_fetcher(state)
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception(
-            "Failed to fetch PR diff; semantic agents will run without code context"
-        )
-
-    # Deterministic banned-pattern scan of the actual diff text — added
-    # lines only, so this can't reject a PR for a pattern that was already
-    # present before the change. Was defined but never applied; the AST
-    # analyzer's own hard_rule_violations (checked above) cover its own
-    # findings, but this is the gate's one direct check against the diff.
-    added_lines = "\n".join(
-        line for line in diff_text.splitlines() if line.startswith("+") and not line.startswith("+++")
-    )
-    added_code = _strip_comments_and_strings(added_lines)
-    for pattern in BANNED_IMPORT_PATTERNS:
-        if pattern in added_code:
-            violations.append(f"banned pattern introduced: {pattern}")
 
     # Deterministic boundary-spec check (app/graph/verification/boundary_spec.py):
     # a dependency edge that crosses a layer boundary the spec declares
@@ -67,7 +34,7 @@ def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
     # would hard-reject every unrelated PR that happens to share an AST
     # payload with it, forever, which isn't "this PR introduced a hard
     # violation" — the only claim the gate is meant to make.
-    boundary_spec = load_default_boundary_spec()
+    boundary_spec = state.boundary_spec  # the reviewed repo's own spec (audit P1-10)
     changed_files = set(state.ast_payload.changed_files)
     diff_scoped_edges = [
         edge for edge in state.ast_payload.dependency_graph if edge.from_file in changed_files
@@ -79,10 +46,5 @@ def agent_1_gate(state: ReviewState, diff_fetcher=None) -> dict:
         )
 
     if violations:
-        return {
-            "hard_rule_violation": True,
-            "rejection_reason": "; ".join(violations),
-            "diff_text": diff_text,
-        }
-
-    return {"hard_rule_violation": False, "diff_text": diff_text}
+        return {"hard_rule_violation": True, "rejection_reason": "; ".join(violations)}
+    return {"hard_rule_violation": False}

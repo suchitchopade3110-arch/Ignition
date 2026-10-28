@@ -117,6 +117,9 @@ class FakeReviewRepo:
                 return {"id": row["id"], "correlation_id": row.get("correlation_id")}
         return None
 
+    def get_check_run_id(self, review_id):
+        return (self.rows.get(review_id) or {}).get("check_run_id")
+
     def get_review_github_context(self, review_id):
         row = self.rows.get(review_id)
         if not row:
@@ -134,14 +137,25 @@ class FakeRepoRepo:
     def __init__(self):
         self.repos: dict[str, dict] = {}
         self.stats_calls: list[dict] = []
+        # Repo settings the review job loads first (audit P1-5). Everything
+        # on except auto-fix, matching the database defaults; tests may edit.
+        self.settings = {
+            "enable_ai_review": True, "enable_auto_fix": False, "enable_hitl": True,
+            "security_scan": True, "architecture_scan": True, "logic_scan": True,
+        }
+        self.settings_requests: list[str] = []
 
-    def get_or_create_repo(self, repo_full_name):
+    def get_or_create_repo(self, repo_full_name, github_repo_id=None):
         repo_id = repo_full_name.replace("/", "_")
         self.repos.setdefault(repo_id, {"id": repo_id})
         return self.repos[repo_id]
 
     def update_repo_stats(self, repo_full_name, acs_score, last_review_at):
         self.stats_calls.append({"repo_full_name": repo_full_name, "acs_score": acs_score})
+
+    def get_or_create_settings(self, repo_id, repo_full_name=None):
+        self.settings_requests.append(repo_id)
+        return dict(self.settings)
 
 
 def _sign(body: bytes) -> str:
@@ -153,6 +167,7 @@ def _webhook_payload() -> dict:
     return {
         "action": "opened",
         "repository": {
+            "id": 1001,  # GitHub's numeric repository id, in every real payload
             "full_name": "acme/widgets",
             "default_branch": "main",
             "clone_url": "https://github.com/acme/widgets.git",
@@ -181,7 +196,7 @@ def _fake_ast_payload() -> ASTAnalyzerPayload:
 
 async def _fake_llm_complete(self, prompt, json_mode=True, agent_name="unknown"):
     """No findings, clean pass — the simplest deterministic path through
-    the graph to finalize_and_post -> GitHubClient.post_review_comment,
+    the graph to finalize_and_post -> GitHubClient.upsert_sticky_comment,
     which is the actual thing this test verifies gets called."""
     if not json_mode:
         return "Clean pass, no notable issues."
@@ -196,9 +211,9 @@ def fake_repos(monkeypatch):
     # both app.main and app.services.review_pipeline (same objects) —
     # patching their bound methods here affects both call paths at once.
     for name in ("create_review", "update_review", "get_review",
-                 "get_review_by_repo_pr_sha", "get_review_github_context"):
-        monkeypatch.setattr(review_repo, name, getattr(fake_review_repo, name))
-    for name in ("get_or_create_repo", "update_repo_stats"):
+                 "get_review_by_repo_pr_sha", "get_review_github_context", "get_check_run_id"):
+        monkeypatch.setattr(review_repo, name, getattr(fake_review_repo, name), raising=False)
+    for name in ("get_or_create_repo", "update_repo_stats", "get_or_create_settings"):
         monkeypatch.setattr(repo_repo, name, getattr(fake_repo_repo, name))
     # The one call site that touches review_repo._db directly (the
     # previous-ACS-score lookup) rather than going through a named method.
@@ -218,9 +233,14 @@ def mock_externals():
          patch.object(LedgerRepository, "get_baseline", return_value=None), \
          patch("app.services.github_client.GitHubClient") as mock_gh_class:
         mock_gh_instance = MagicMock()
-        mock_gh_instance.post_review_comment.return_value = {
+        mock_gh_instance.upsert_sticky_comment.return_value = {
             "id": 555111, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-555111",
         }
+        mock_gh_instance.bot_login = "ignition-review[bot]"
+        mock_gh_instance.create_check_run.return_value = 4242  # audit P0-6
+        # The PR's current head is the event's head (no newer push) unless a
+        # test says otherwise (audit P1-8 superseded-SHA checks).
+        mock_gh_instance.get_pr_head_sha.return_value = "deadbeef00000000000000000000000000000000"
         # get_pr_diff and the raw PyGithub PR object both need to return
         # real strings, not an unconfigured MagicMock — ReviewState.diff_text
         # is a real pydantic string field, and pydantic correctly rejects a
@@ -233,6 +253,7 @@ def mock_externals():
         fake_pr.title = "Test PR"
         fake_pr.user.login = "test-author"
         fake_pr.head.ref = "test-branch"
+        fake_pr.head.sha = "deadbeef00000000000000000000000000000000"
         mock_gh_instance._client.get_repo.return_value.get_pull.return_value = fake_pr
         mock_gh_class.return_value = mock_gh_instance
         yield {"github_client": mock_gh_class, "github_instance": mock_gh_instance}
@@ -300,8 +321,8 @@ async def test_webhook_to_review_to_github_comment(fake_repos, mock_externals, m
     # 3. GitHub comment: the actual thing this whole flow exists to
     # produce. Assert it was called with the right repo/PR, not just that
     # *something* was called.
-    mock_externals["github_instance"].post_review_comment.assert_called_once()
-    call_kwargs = mock_externals["github_instance"].post_review_comment.call_args.kwargs
+    mock_externals["github_instance"].upsert_sticky_comment.assert_called_once()
+    call_kwargs = mock_externals["github_instance"].upsert_sticky_comment.call_args.kwargs
     assert call_kwargs["repo_full_name"] == "acme/widgets"
     assert call_kwargs["pr_number"] == 7
 
@@ -343,3 +364,85 @@ async def test_duplicate_webhook_delivery_does_not_start_second_run(fake_repos, 
     assert second.json()["reviewId"] == first.json()["reviewId"]
     # Only one enqueue_job call total, not two.
     assert mock_arq.enqueue_job.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_agents_mark_review_incomplete_not_clean(fake_repos, mock_externals, mock_arq):
+    """Audit P0-1: with every LLM call failing, the review must be recorded
+    as incomplete (dashboard status_reason, comment text), never as a
+    clean pass."""
+    fake_review_repo, _ = fake_repos
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/github", content=body,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": _sign(body),
+                     "X-GitHub-Delivery": "incomplete-test-1"},
+        )
+    assert response.status_code == 202
+    event_payload, review_id, correlation_id = mock_arq.enqueue_job.call_args.args[1:4]
+
+    with patch.object(LLMClient, "complete", new=AsyncMock(side_effect=RuntimeError("model_decommissioned"))):
+        await run_review_job({}, event_payload, review_id, correlation_id)
+
+    final = fake_review_repo.get_review(review_id)
+    assert final["status_reason"] == "incomplete: one or more agents failed"
+    assert "Review incomplete" in final["final_comment_markdown"]
+    assert "Clean pass" not in final["final_comment_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_passes_installation_token_to_analyzer(fake_repos, mock_externals, mock_arq):
+    """Audit P0-8: the analyzer can only clone a private repo if the worker
+    hands it the installation token."""
+    mock_externals["github_instance"].installation_token = "ghs_installation"
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/webhooks/github", content=body,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": _sign(body),
+                     "X-GitHub-Delivery": "token-test-1"},
+        )
+    event_payload, review_id, correlation_id = mock_arq.enqueue_job.call_args.args[1:4]
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    assert ASTClient.analyze_git.await_args.kwargs["auth_token"] == "ghs_installation"
+
+
+async def _enqueue_one(mock_arq, delivery):
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/webhooks/github", content=body, headers={
+            "Content-Type": "application/json", "X-Hub-Signature-256": _sign(body), "X-GitHub-Delivery": delivery})
+    return mock_arq.enqueue_job.call_args.args[1:4]
+
+
+@pytest.mark.asyncio
+async def test_superseded_head_is_cancelled_before_analysis(fake_repos, mock_externals, mock_arq):
+    """Audit P1-8: a push landed after this webhook — don't analyse a stale SHA."""
+    fake_review_repo, _ = fake_repos
+    gh = mock_externals["github_instance"]
+    gh._client.get_repo.return_value.get_pull.return_value.head.sha = "f" * 40
+    event_payload, review_id, correlation_id = await _enqueue_one(mock_arq, "superseded-1")
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    row = fake_review_repo.get_review(review_id)
+    assert row["status"] == "cancelled"
+    assert row["status_reason"] == f"superseded by {'f' * 40}"
+    ASTClient.analyze_git.assert_not_awaited()
+    gh.upsert_sticky_comment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_superseded_head_is_cancelled_before_posting(fake_repos, mock_externals, mock_arq):
+    """Audit P1-8: the head moved while this review ran — don't post stale results."""
+    fake_review_repo, _ = fake_repos
+    gh = mock_externals["github_instance"]
+    gh.get_pr_head_sha.return_value = "f" * 40  # checked again just before posting
+    event_payload, review_id, correlation_id = await _enqueue_one(mock_arq, "superseded-2")
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    row = fake_review_repo.get_review(review_id)
+    assert row["status"] == "cancelled"
+    assert row["status_reason"] == f"superseded by {'f' * 40}"
+    gh.upsert_sticky_comment.assert_not_called()

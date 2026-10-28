@@ -177,7 +177,17 @@ export function ReviewDetailView({
         <div className="space-y-8 min-w-0">
           <section className="min-w-0">
             <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Final Output</h2>
-            <MarkdownPreview content={review.githubCommentPreview} />
+            <MarkdownPreview content={review.finalCommentMarkdown ?? undefined} />
+            {review.githubCommentPreview && (
+              <a
+                href={review.githubCommentPreview}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-3 inline-block text-xs text-muted-foreground underline"
+              >
+                View the comment on GitHub
+              </a>
+            )}
           </section>
         </div>
       </div>

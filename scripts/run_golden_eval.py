@@ -26,15 +26,20 @@ release on a single-digit fixture count would be more noise than signal.
 """
 import asyncio
 import sys
+from pathlib import Path
 
-from app.graph.nodes.agent_1_gate import agent_1_gate
-from app.graph.nodes.agent_2a_struct import agent_2a_struct
-from app.graph.nodes.agent_2b_chaos import agent_2b_chaos
-from app.graph.nodes.agent_2c_security import agent_2c_security
-from app.graph.nodes.agent_3_critic import agent_3_critic
-from app.graph.state import ReviewState
-from tests.eval.fixtures import GoldenPR, GOLDEN_PRS
-from tests.eval.metrics import EvalResult, score_findings
+# Run as `python scripts/run_golden_eval.py` (CI's golden-eval job), so the
+# repo root isn't on sys.path by default.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.graph.nodes.agent_1_gate import agent_1_gate  # noqa: E402
+from app.graph.nodes.agent_2a_struct import agent_2a_struct  # noqa: E402
+from app.graph.nodes.agent_2b_chaos import agent_2b_chaos  # noqa: E402
+from app.graph.nodes.agent_2c_security import agent_2c_security  # noqa: E402
+from app.graph.nodes.agent_3_critic import agent_3_critic  # noqa: E402
+from app.graph.state import ReviewState  # noqa: E402
+from tests.eval.fixtures import GoldenPR, GOLDEN_PRS  # noqa: E402
+from tests.eval.metrics import EvalResult, score_findings  # noqa: E402
 
 MIN_F1 = 0.6  # advisory threshold; see module docstring on why it isn't a hard CI gate yet
 
@@ -50,11 +55,11 @@ async def _run_one(pr: GoldenPR) -> EvalResult:
 
     # Runs the same node sequence the compiled graph would for a
     # non-rejected, non-retry PR, without needing a live GitHub
-    # installation (agent_1_gate's diff_fetcher is injected here instead)
-    # or a live Supabase baseline (there is deliberately no ledger entry
-    # for "acme/eval", so is_rule_regression short-circuits on "no
-    # baseline" rather than this eval run depending on persisted state).
-    gate_result = agent_1_gate(state, diff_fetcher=lambda s: pr.diff_text)
+    # installation (the gate reads the analyzer payload and state.diff_text,
+    # it never fetches) or a live Supabase baseline (there is deliberately
+    # no ledger entry for "acme/eval", so is_rule_regression short-circuits
+    # on "no baseline" rather than this eval run depending on persisted state).
+    gate_result = agent_1_gate(state)
     state = state.model_copy(update=gate_result)
     if state.hard_rule_violation:
         return score_findings(pr.expected_findings, [])

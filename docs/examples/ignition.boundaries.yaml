@@ -1,5 +1,13 @@
-# Architecture boundary spec for Ignition's deterministic gate
-# (app/graph/nodes/agent_1_gate.py via app/graph/verification/boundary_spec.py).
+# Example architecture boundary spec — a template to copy.
+#
+# Ignition reads `ignition.boundaries.yaml` from the root of YOUR repository,
+# at the pull request's base commit (so a PR can't loosen its own rules).
+# Copy this file there and replace the layers and rules with your own. This
+# copy describes Ignition's own codebase. Without the file, boundary checks
+# are skipped and the review comment says so. Max size 64 KB.
+#
+# Used by the deterministic gate (app/graph/nodes/agent_1_gate.py) and the
+# Critic's fact-check (app/graph/verification/boundary_spec.py).
 #
 # `layers` name a set of glob patterns matched against file paths reported in
 # the AST analyzer's dependency graph (ASTAnalyzerPayload.dependency_graph).

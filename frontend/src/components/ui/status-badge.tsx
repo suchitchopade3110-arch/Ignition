@@ -20,9 +20,13 @@ const config = {
   running: { label: "Running", icon: PlayCircle, styles: "bg-primary/10 text-primary border-primary/20" },
   paused: { label: "Paused", icon: PauseCircle, styles: "bg-warning/10 text-warning border-warning/20" },
   waiting_hitl: { label: "Waiting HITL", icon: UserCog, styles: "bg-warning/10 text-warning border-warning/20" },
+  // An approval is being posted to GitHub (audit P1-6).
+  posting: { label: "Posting", icon: Clock, styles: "bg-primary/10 text-primary border-primary/20" },
   completed: { label: "Completed", icon: CheckCircle2, styles: "bg-success/10 text-success border-success/20" },
   failed: { label: "Failed", icon: XCircle, styles: "bg-critical/10 text-critical border-critical/20" },
   cancelled: { label: "Cancelled", icon: Ban, styles: "bg-secondary text-muted-foreground border-border" },
+  // Dismissed by a maintainer from the HITL queue (audit P1-6).
+  rejected: { label: "Rejected", icon: XCircle, styles: "bg-secondary text-muted-foreground border-border" },
 }
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {

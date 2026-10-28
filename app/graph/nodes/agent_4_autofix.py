@@ -12,6 +12,8 @@ import logging
 from collections import defaultdict
 
 from app.graph.state import ReviewState, Finding
+from app.services.diff_lines import added_lines
+from app.services.prompt_safety import sanitize_narrative
 
 logger = logging.getLogger(__name__)
 
@@ -53,32 +55,34 @@ async def agent_4_autofix(state: ReviewState) -> dict:
         seen_locations.add(loc)
 
     if not resolved_patches:
-        # No patchable findings (or nothing survived conflict resolution).
-        # Still return the full state shape — an empty dict here doesn't
-        # write to any state channel and can surface as None to consumers
-        # of the graph's update stream (see review_pipeline.py).
         return {"autofix_posted": 0, "autofix_failed": 0}
+
+    # One COMMENT review per head SHA (P2 auto-fix). Inline only where the
+    # PR added the line (GitHub 422s anything else); the rest are listed in
+    # the review body as text.
+    added = added_lines(state.diff_text)
+    inline = [f for f in resolved_patches if f.line in added.get(f.file_path, ())]
+    as_text = [f for f in resolved_patches if f not in inline]
+    comments = [
+        {"path": f.file_path, "line": f.line, "side": "RIGHT", "body": f"```suggestion\n{f.suggested_patch}\n```"}
+        for f in inline
+    ]
+    body = ["Suggested fixes from Ignition."]
+    if as_text:
+        body += ["", "These are on lines this PR didn't add, so they can't be inline suggestions:", ""]
+        for f in as_text:
+            location = f"{f.file_path}:{f.line}" if f.line is not None else f.file_path
+            body += [f"- `{location}`: {sanitize_narrative(f.description)}", "", "```", f.suggested_patch, "```"]
 
     from app.services.github_client import GitHubClient
 
     client = GitHubClient(installation_id=state.installation_id)
-    posted_count = 0
-    failed_count = 0
-
-    for finding in resolved_patches:
-        try:
-            client.post_inline_suggestion(
-                repo_full_name=state.repo_full_name,
-                pr_number=state.pr_number,
-                file_path=finding.file_path,
-                line=finding.line,
-                patch=finding.suggested_patch,
-            )
-            posted_count += 1
-        except Exception:
-            logger.exception(
-                "Failed to post inline suggestion for %s:%s", finding.file_path, finding.line
-            )
-            failed_count += 1
-
-    return {"autofix_posted": posted_count, "autofix_failed": failed_count}
+    try:
+        client.post_suggestion_review(
+            repo_full_name=state.repo_full_name, pr_number=state.pr_number, head_sha=state.head_sha,
+            body="\n".join(body), comments=comments, bot_login=client.bot_login,
+        )
+    except Exception:
+        logger.exception("Failed to post the auto-fix review")
+        return {"autofix_posted": 0, "autofix_failed": len(resolved_patches)}
+    return {"autofix_posted": len(inline), "autofix_failed": 0}

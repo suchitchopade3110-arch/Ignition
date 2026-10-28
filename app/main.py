@@ -9,11 +9,13 @@ Responsibilities:
   - Serve all REST endpoints expected by the Next.js frontend
 """
 import asyncio
+import hmac
 import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, APIRouter, BackgroundTasks, Query
@@ -41,6 +43,7 @@ from app.auth import (
     require_repo_id_access,
     require_review_repo_access,
     check_repo_access,
+    get_accessible_repos,
     AuthUser,
 )
 
@@ -61,11 +64,22 @@ from app.services.stream_manager import stream_manager
 from app.services.logging_config import configure_logging, set_correlation_id
 from app.services.health_checks import run_health_checks
 from app.services.llm_client import get_llm_client
+from app.services.schema_check import require_tables_or_exit
+from app.services import check_runs
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Ignition")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # A deploy that skipped a migration fails here, at startup, instead of
+    # failing reviews later (audit P0-9). The Supabase client is sync.
+    await asyncio.to_thread(require_tables_or_exit)
+    yield
+
+
+app = FastAPI(title="Ignition", lifespan=lifespan)
 
 settings = get_settings()
 settings.validate_production_safety(logger)
@@ -86,7 +100,7 @@ def _rate_limit_exceeded_handler_with_metric(request: Request, exc: RateLimitExc
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler_with_metric)
 app.add_middleware(SlowAPIMiddleware)
 # Constructed once here, at module import (same lifecycle as ast_client/
-# graph in app/services/review_pipeline.py) — /healthz's LLM reachability
+# graph in app/services/review_pipeline.py) — /readyz's LLM reachability
 # check (app/services/health_checks.py) is this process's only caller, but
 # it should still be the one shared instance, not a fresh AsyncGroq per
 # health-check poll.
@@ -145,18 +159,30 @@ async def _record_http_metrics(request: Request, call_next):
     return response
 
 
+def _require_bearer(request: Request, expected: str) -> None:
+    """Operator endpoints (/metrics I-11, /readyz I-5): with a configured
+    token, the caller must send `Authorization: Bearer <token>` (compared in
+    constant time) or gets 401; with none configured, the endpoint is 404
+    in production and open in development."""
+    if not expected:
+        if settings.app_env == "production":
+            raise HTTPException(status_code=404, detail="Not Found")
+        return
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {expected}".encode()):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint(request: Request):
     """
-    Prometheus scrape target. Unauthenticated like /healthz — a scraper
-    needs to reach it without a session (same reasoning as /healthz's own
-    docstring). Gated on METRICS_ENABLED (app/config.py) rather than always
-    mounted, so a deployment that doesn't want operational metrics exposed
-    can omit the endpoint entirely instead of relying on network-level
-    blocking alone.
+    Prometheus scrape target, behind `Authorization: Bearer $METRICS_TOKEN`
+    (I-11; Prometheus sends it via `authorization: {credentials: ...}`).
+    No session needed. METRICS_ENABLED=false omits the endpoint entirely.
     """
     if not settings.metrics_enabled:
         raise HTTPException(status_code=404, detail="Not Found")
+    _require_bearer(request, settings.metrics_token)  # hmac.compare_digest inside
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -188,7 +214,7 @@ def _handle_installation_event(event_type: str, payload: dict) -> None:
                 full_name = repo.get("full_name")
                 if not full_name:
                     continue
-                repo_repo.get_or_create_repo(full_name)
+                repo_repo.get_or_create_repo(full_name, github_repo_id=repo.get("id"))
                 repo_repo.set_repo_installed(full_name, True)
             logger.info("Installation event: registered repos", extra={"action": action, "count": len(repos)})
         elif action in ("deleted", "suspend"):
@@ -206,7 +232,7 @@ def _handle_installation_event(event_type: str, payload: dict) -> None:
             full_name = repo.get("full_name")
             if not full_name:
                 continue
-            repo_repo.get_or_create_repo(full_name)
+            repo_repo.get_or_create_repo(full_name, github_repo_id=repo.get("id"))
             repo_repo.set_repo_installed(full_name, True)
         for repo in payload.get("repositories_removed") or []:
             full_name = repo.get("full_name")
@@ -248,7 +274,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     event_type = request.headers.get("X-GitHub-Event", "pull_request")
     logger.info("Webhook received", extra={"delivery_id": delivery_id, "event_type": event_type})
     if event_type in ("installation", "installation_repositories"):
-        _handle_installation_event(event_type, payload)
+        await asyncio.to_thread(_handle_installation_event, event_type, payload)
         metrics.webhook_events_total.labels(event_type=event_type, outcome="processed").inc()
         return {"status": "processed", "event": event_type}
     if event_type not in ("pull_request", "ping"):
@@ -267,15 +293,35 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         metrics.webhook_events_total.labels(event_type=event_type, outcome="rejected").inc()
         raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {exc}")
 
-    if event.action not in {"opened", "synchronize", "reopened"}:
+    # A merged PR becomes part of the repo's regression baseline (audit
+    # P0-7). One job per PR: Arq refuses a second job with the same id, so a
+    # redelivered "closed" event doesn't double-write.
+    if event.action == "closed" and event.pull_request.merged:
+        pool = await get_arq_pool()
+        await pool.enqueue_job(
+            "record_merge_baseline", event.repository.full_name, event.pull_request.number,
+            event.pull_request.head_sha,
+            _job_id=f"baseline:{event.repository.full_name}:{event.pull_request.number}",
+        )
+        logger.info("Merge baseline job enqueued", extra={"pr_number": event.pull_request.number})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
+        return {"status": "baseline_queued"}
+
+    if event.action not in {"opened", "synchronize", "reopened", "ready_for_review"}:
         logger.info("Webhook action ignored", extra={"action": event.action})
         metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
         return {"status": "ignored", "action": event.action}
+    if event.pull_request.draft:
+        # Reviewed once it's marked ready (the ready_for_review action above).
+        logger.info("Draft PR ignored", extra={"pr_number": event.pull_request.number})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
+        return {"status": "ignored", "reason": "draft"}
 
     review_id = str(uuid.uuid4())
 
     # Ensure repository is registered
-    repo_repo.get_or_create_repo(event.repository.full_name)
+    await asyncio.to_thread(repo_repo.get_or_create_repo, event.repository.full_name,
+                            github_repo_id=event.repository.id)
 
     # Idempotency: a duplicate delivery for the same (repo, PR, head commit)
     # must not spawn a second LangGraph run. Enforced as a DB-level unique
@@ -287,7 +333,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # whole point is to stop the second run from starting at all, not to
     # detect and clean up after two runs already kicked off.
     try:
-        review_repo.create_review(
+        await asyncio.to_thread(review_repo.create_review,
             review_id=review_id,
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
@@ -300,7 +346,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         )
     except APIError as exc:
         if exc.code == "23505" or "duplicate key" in (exc.message or "").lower():
-            existing = review_repo.get_review_by_repo_pr_sha(
+            existing = await asyncio.to_thread(review_repo.get_review_by_repo_pr_sha,
                 repo_full_name=event.repository.full_name,
                 pr_number=event.pull_request.number,
                 commit_sha=event.pull_request.head_sha,
@@ -329,6 +375,18 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
             }
         raise
 
+    # The "Ignition" check run (audit P0-6), created now so the PR shows a
+    # queued check straight away. A GitHub hiccup here must never drop the
+    # webhook: the job creates the check run itself if this didn't.
+    try:
+        check_run_id = await asyncio.to_thread(
+            check_runs.create_check_run_sync,
+            event.installation.id, event.repository.full_name, event.pull_request.head_sha,
+        )
+        await asyncio.to_thread(review_repo.update_review, review_id, {"check_run_id": check_run_id})
+    except Exception:
+        logger.exception("Could not create the GitHub check run", extra={"review_id": review_id})
+
     # Dispatch the review as an Arq job instead of an in-process
     # asyncio.create_task — this is what lets it survive this FastAPI
     # process restarting, and run on a worker process that isn't even this
@@ -339,9 +397,32 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # folded into the webhook payload dict where it'd be one more
     # unlabeled key nobody reading run_review_job's signature would think
     # to look for.
-    pool = await get_arq_pool()
-    job = await pool.enqueue_job("run_review_job", event.model_dump(mode="json"), review_id, correlation_id)
-    review_repo.update_review(review_id, {"job_id": job.job_id if job else None})
+    event_payload = event.model_dump(mode="json")
+    try:
+        pool = await get_arq_pool()
+        # One job per (repo, PR, head SHA) (audit P1-8): Arq refuses a second
+        # job with the same id, so a redelivered event can't run the same SHA twice.
+        job = await pool.enqueue_job(
+            "run_review_job", event_payload, review_id, correlation_id,
+            _job_id=f"review:{event.repository.full_name}:{event.pull_request.number}:{event.pull_request.head_sha}",
+        )
+    except Exception:
+        # Never leave a row "queued" with no job behind it (I-4). The partial
+        # dedupe index lets a redelivery of this event create a fresh review.
+        logger.exception("Could not enqueue the review job", extra={"review_id": review_id})
+        status_reason = "failed: could not enqueue the review job"
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
+        await check_runs.conclude_check_run(
+            reviews=review_repo, review_id=review_id, installation_id=event.installation.id,
+            repo=event.repository.full_name, head_sha=event.pull_request.head_sha, conclusion="neutral",
+            title=check_runs.could_not_finish_title(status_reason), summary=status_reason,
+        )
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="enqueue_failed").inc()
+        raise HTTPException(status_code=503, detail="Could not queue the review; redeliver the webhook to retry")
+    # The event is kept so reconciliation can re-enqueue a lost job (I-4).
+    await asyncio.to_thread(
+        review_repo.update_review, review_id, {"job_id": job.job_id if job else None, "event_payload": event_payload}
+    )
     logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
     metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
 
@@ -358,23 +439,24 @@ api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @api_router.get("/stats", response_model=DashboardStats)
-async def get_stats():
-    return DashboardStats(**review_repo.get_stats())
+def get_stats(repos: frozenset[str] = Depends(get_accessible_repos)):
+    return DashboardStats(**review_repo.get_stats(repo_names=repos))
 
 
 @api_router.get("/repos", response_model=list[Repository])
-async def get_repos():
-    return [Repository(**r) for r in repo_repo.list_repos()]
+def get_repos(repos: frozenset[str] = Depends(get_accessible_repos)):
+    return [Repository(**r) for r in repo_repo.list_repos(repo_names=repos)]
 
 
+# repo_id is GitHub's numeric repository id (P2 repo IDs), not owner_name.
 @api_router.get("/repos/{repo_id}/settings", response_model=RepositorySettings)
-async def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_access)):
+def get_repo_settings(repo_id: int, _: AuthUser = Depends(require_repo_id_access)):
     return RepositorySettings(**repo_repo.get_or_create_settings(repo_id))
 
 
 @api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings, dependencies=[Depends(verify_csrf_token)])
-async def update_repo_settings(
-    repo_id: str, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
+def update_repo_settings(
+    repo_id: int, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
 ):
     settings_dict = settings_update.model_dump()
     return RepositorySettings(**repo_repo.update_settings(repo_id, settings_dict))
@@ -389,26 +471,26 @@ async def get_reviews(
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     user: AuthUser = Depends(get_current_user),
     request: Request = None,
+    repos: frozenset[str] = Depends(get_accessible_repos),
 ):
-    # `repo` is an optional query filter here (unlike the path-scoped routes
-    # below), so ownership is only checked when a specific repo is asked for.
-    # With no filter this returns the caller's own cross-repo review history
-    # from `list_reviews` — login is required, but it is not further scoped
-    # per-repo since there is no single repo to check against.
+    # Scoped to the caller's own repos (audit P0-4): with ?repo=, that one
+    # repo after an access check; without it, every repo the caller can push
+    # to. Never every tenant's reviews.
     if repo:
         await check_repo_access(request, repo)
+        repos = frozenset({repo})
     # list_reviews already implemented real offset pagination (page/
     # page_size -> Supabase .range()) — this route just never exposed it,
     # hardcoding page=1/page_size=1000 and discarding the real `total`
     # count it already returns.
-    items, total = review_repo.list_reviews(
-        repo_name=repo, status=status, severity=severity, page=page, page_size=page_size
+    items, total = await asyncio.to_thread(review_repo.list_reviews,
+        repo_name=repo, status=status, severity=severity, page=page, page_size=page_size, repo_names=repos
     )
     return Paginated(items=[Review(**i) for i in items], page=page, page_size=page_size, total=total)
 
 
 @api_router.get("/repos/{repo_full_name:path}/reviews", response_model=Paginated[Review])
-async def get_repo_reviews(
+def get_repo_reviews(
     repo_full_name: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -419,7 +501,7 @@ async def get_repo_reviews(
 
 
 @api_router.get("/reviews/{review_id}", response_model=ReviewDetail)
-async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
+def get_review_detail(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -427,15 +509,15 @@ async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review
 
 
 @api_router.get("/hitl/pending", response_model=list[HitlItem])
-async def get_hitl_pending():
-    pending = review_repo.list_hitl_pending()
+def get_hitl_pending(repos: frozenset[str] = Depends(get_accessible_repos)):
+    pending = review_repo.list_hitl_pending(repo_names=repos)
     # Set (not incremented) from this query's own result each time it's
     # polled — see the metric's own docstring (app/services/metrics.py) for
     # why that's deliberate: it tracks the dashboard's actual source of
     # truth instead of a separately-maintained running count that could
     # drift from it.
     metrics.hitl_pending_gauge.set(len(pending))
-    now_str = datetime.utcnow().isoformat() + "Z"
+    now_str = datetime.now(timezone.utc).isoformat()
     return [HitlItem(**{**r, "waiting_since": r.get("created_at", now_str)}) for r in pending]
 
 
@@ -467,7 +549,7 @@ def _record_hitl_outcomes(review: dict, repo_full_name: str, review_id: str, out
 
 @api_router.post("/hitl/{review_id}/approve", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
-    review = review_repo.get_review(review_id)
+    review = await asyncio.to_thread(review_repo.get_review, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
@@ -480,7 +562,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # time (see github_webhook below), not a hardcoded fallback — a
     # hardcoded id silently posts through whichever installation that id
     # happens to belong to, which may not even have this repo installed.
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if not gh_context or not gh_context.get("repo_full_name") or not gh_context.get("installation_id"):
         raise HTTPException(
             status_code=409,
@@ -497,32 +579,79 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     if gh_context.get("correlation_id"):
         set_correlation_id(gh_context["correlation_id"])
 
-    review_repo.update_review(review_id, {"status": "completed"})
-    _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
+    # Compare-and-set claim (audit P1-6): PostgREST's update ... eq(status)
+    # is one UPDATE ... WHERE status = 'waiting_hitl' RETURNING, so exactly
+    # one concurrent approve wins; every other gets 409 and posts nothing.
+    reviews = review_repo._db.table(review_repo.TABLE)
+    # status_changed_at lets reconciliation release a claim whose request
+    # died between claim and post (I-4: posting > 5 min -> waiting_hitl).
+    claimed = await asyncio.to_thread(
+        reviews.update({"status": "posting", "status_changed_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", review_id).eq("status", "waiting_hitl").execute
+    )
+    if not claimed.data:
+        raise HTTPException(status_code=409, detail="Review is not awaiting approval")
 
-    # Post final comment to GitHub. A failure here is surfaced to the
-    # caller (502), not swallowed — silently returning success while the
-    # comment never posted is exactly the failure mode this fix closes.
+    def _release_claim() -> None:
+        # Post didn't happen: hand the review back so a human can retry.
+        review_repo._db.table(review_repo.TABLE).update({"status": "waiting_hitl"}) \
+            .eq("id", review_id).eq("status", "posting").execute()
+
     from app.services.github_client import GitHubClient
 
+    def _client_and_head():
+        client = GitHubClient(installation_id=gh_context["installation_id"])
+        return client, client.get_pr_head_sha(gh_context["repo_full_name"], gh_context["pr_number"])
+
+    try:
+        # PyGithub is synchronous: off the event loop (audit P1-7).
+        gh, current_head = await asyncio.to_thread(_client_and_head)
+    except Exception as e:
+        logger.exception("Failed to read the PR's current head from GitHub: %s", e)
+        await asyncio.to_thread(_release_claim)
+        raise HTTPException(status_code=502, detail="Could not reach GitHub to post the approval")
+    # Same rule as the pipeline's "check again before posting" (audit P1-8):
+    # the comment is sticky, so approving a review of an older commit would
+    # overwrite the newer review's comment.
+    if gh_context.get("commit_sha") and current_head and current_head != gh_context["commit_sha"]:
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
+        await _reconclude_check_run(review_id, gh_context, "neutral",
+                                    check_runs.could_not_finish_title(f"superseded by {current_head}"))
+        raise HTTPException(status_code=409, detail=f"This review is superseded by {current_head}; nothing was posted")
+
+    # Post through the sticky comment (audit P1-8), so even a retried post
+    # after a timeout is an edit, never a duplicate. A failure is surfaced
+    # (502) and the claim released — never a silent "approved".
     try:
         logger.info("Posting HITL-approved comment to GitHub", extra={
             "review_id": review_id, "repo_full_name": gh_context["repo_full_name"], "pr_number": gh_context["pr_number"],
         })
-        gh = GitHubClient(installation_id=gh_context["installation_id"])
-        github_response = gh.post_review_comment(
+        github_response = await asyncio.to_thread(
+            gh.upsert_sticky_comment,
             repo_full_name=gh_context["repo_full_name"],
             pr_number=gh_context["pr_number"],
-            markdown_body=gh_context.get("final_comment_markdown") or "Approved by human.",
+            body=gh_context.get("final_comment_markdown") or "Approved by human.",
+            bot_login=gh.bot_login,
         )
     except Exception as e:
         logger.exception("Failed to post human approval comment to GitHub: %s", e)
+        await asyncio.to_thread(_release_claim)
         raise HTTPException(status_code=502, detail=f"Failed to post approval comment to GitHub: {e}")
 
     logger.info("GitHub comment posted", extra={
         "review_id": review_id, "github_comment_url": github_response.get("html_url"),
     })
-    review_repo.update_review(review_id, {"github_comment_preview": github_response.get("html_url")})
+    await asyncio.to_thread(review_repo.update_review,
+        review_id, {"status": "completed", "github_comment_preview": github_response.get("html_url")}
+    )
+    # Only now, after the post succeeded, is this a real approval worth
+    # learning from (audit P1-6).
+    await asyncio.to_thread(_record_hitl_outcomes, review, gh_context["repo_full_name"], review_id, "approved")
+    # The check was left at action_required; it now reflects what was posted.
+    conclusion, title = check_runs.posted_outcome(
+        review.get("findings") or [], bool((review.get("status_reason") or "").startswith("incomplete")),
+    )
+    await _reconclude_check_run(review_id, gh_context, conclusion, title, gh_context.get("final_comment_markdown"))
 
     # Publish hitl.approved and completed events
     await stream_manager.publish(review_id, {"type": "hitl.approved", "reviewId": review_id})
@@ -537,17 +666,39 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     }
 
 
+async def _reconclude_check_run(review_id: str, gh_context: dict, conclusion: str, title: str,
+                                summary: str | None = None) -> None:
+    """Moves a paused review's check off action_required once a human has
+    decided (audit P0-6). Best-effort: the decision already stands."""
+    if not gh_context.get("installation_id") or not gh_context.get("commit_sha"):
+        return
+    await check_runs.conclude_check_run(
+        reviews=review_repo, review_id=review_id, installation_id=gh_context["installation_id"],
+        repo=gh_context["repo_full_name"], head_sha=gh_context["commit_sha"],
+        conclusion=conclusion, title=title, summary=summary or title,
+    )
+
+
 @api_router.post("/hitl/{review_id}/reject", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
-    review = review_repo.get_review(review_id)
+    review = await asyncio.to_thread(review_repo.get_review, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
-    review_repo.update_review(review_id, {"status": "completed"})  # or failed/rejected
+    # Same compare-and-set as approve (audit P1-6): only a review still
+    # awaiting a human can be rejected, and only once.
+    claimed = await asyncio.to_thread(
+        review_repo._db.table(review_repo.TABLE).update({"status": "rejected"})
+        .eq("id", review_id).eq("status", "waiting_hitl").execute
+    )
+    if not claimed.data:
+        raise HTTPException(status_code=409, detail="Review is not awaiting approval")
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "rejected"})  # stamps completed_at/duration
 
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if gh_context and gh_context.get("repo_full_name"):
-        _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "rejected")
+        await asyncio.to_thread(_record_hitl_outcomes, review, gh_context["repo_full_name"], review_id, "rejected")
+        await _reconclude_check_run(review_id, gh_context, "neutral", "Review dismissed by a maintainer")
 
     await stream_manager.publish(review_id, {"type": "hitl.rejected", "reviewId": review_id})
     await stream_manager.publish(
@@ -558,12 +709,12 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
 
 
 @api_router.get("/ledger/{repo_full_name:path}/trend", response_model=list[LedgerTrend])
-async def get_ledger_trend(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
+def get_ledger_trend(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return [LedgerTrend(**t) for t in review_repo.get_ledger_trend(repo_full_name)]
 
 
 @api_router.get("/ledger/{repo_full_name:path}", response_model=LedgerStats)
-async def get_ledger_stats(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
+def get_ledger_stats(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return LedgerStats(**review_repo.get_ledger_stats(repo_full_name))
 
 
@@ -585,13 +736,23 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
     actually firing before this fix — found while rewriting this endpoint
     for Redis, not something this migration introduced.
     """
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if gh_context and gh_context.get("correlation_id"):
         set_correlation_id(gh_context["correlation_id"])
 
     async def event_generator():
+        # An SSE comment straight away: the Next.js rewrite (audit P0-5)
+        # forwards response headers only with the first body byte, so
+        # without this the browser's EventSource wouldn't open until the
+        # first real event. Comment lines are ignored by EventSource.
+        yield ": connected\n\n"
         try:
             async for event in stream_manager.stream(review_id):
+                if event is None:
+                    # Nothing for a while (I-8): an SSE comment keeps
+                    # proxies from cutting the stream; EventSource ignores it.
+                    yield ": keepalive\n\n"
+                    continue
                 payload = SseEventPayload(**event)
                 event_type = event.get("type", "message")
                 yield f"event: {event_type}\ndata: {payload.model_dump_json(by_alias=True)}\n\n"
@@ -609,21 +770,45 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
         headers={
             "Cache-Control": "no-cache, no-transform",
             "Connection": "keep-alive",
+            # The stream now reaches the browser through the frontend's
+            # Next.js rewrite (audit P0-5); tell any proxy not to buffer it.
+            "X-Accel-Buffering": "no",
         },
     )
 
 
-@app.get("/healthz")
-async def healthz(response: Response):
+@app.get("/livez")
+async def livez():
+    """Render's health check (I-5): is this process serving requests. No
+    dependency calls, so a slow Groq or Supabase never gets the web service
+    restarted and a poll costs nothing."""
+    return {"status": "ok"}
+
+
+# The deep check's last result, reused for 15 s so a poller can't turn it
+# into a stream of Groq/Supabase calls (I-5).
+_READYZ_CACHE_SECONDS = 15.0
+_readyz_cache: dict = {}
+
+
+@app.get("/readyz")
+async def readyz(request: Request, response: Response):
     """
-    Real dependency reachability, not a static ping — see
-    app/services/health_checks.py. Intentionally NOT behind the Phase 1
-    auth dependency: infra tooling (load balancers, uptime monitors,
-    container orchestrators) needs to reach this without a session, which
-    is the standard shape for a health-check endpoint and matches this
-    route's existing placement (outside api_router already).
+    Real dependency reachability (Supabase, the analyzer, the LLM provider,
+    Redis — app/services/health_checks.py), for operators and monitors, not
+    the platform probe. Requires `Authorization: Bearer $READYZ_TOKEN`;
+    without a configured token it is 404 in production and open locally.
+    Errors name only the exception class.
     """
-    body, all_healthy = await run_health_checks()
+    _require_bearer(request, settings.readyz_token)
+
+    now = time.monotonic()
+    cached = _readyz_cache.get("result")
+    if cached and now - cached[0] < _READYZ_CACHE_SECONDS:
+        body, all_healthy = cached[1], cached[2]
+    else:
+        body, all_healthy = await run_health_checks()
+        _readyz_cache["result"] = (now, body, all_healthy)
     if not all_healthy:
         response.status_code = 503
     return body

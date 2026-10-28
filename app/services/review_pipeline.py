@@ -13,17 +13,22 @@ so there's one source of truth instead of two.
 """
 import asyncio
 import logging
+import os
+import socket
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.schemas.github import PullRequestWebhook
 from app.services.ast_client import ASTClient
 from app.services.stream_manager import stream_manager
 from app.services import metrics
+from app.services import check_runs
+from app.services.prompt_safety import sanitize_narrative
 from app.graph.workflow import build_graph
 from app.graph.state import ReviewState
 from app.repositories.dashboard import ReviewRepository, RepoRepository
+from app.repositories.ledger import LedgerRepository
 from app.services.logging_config import set_correlation_id
 
 logger = logging.getLogger(__name__)
@@ -34,6 +39,110 @@ graph = build_graph()
 
 review_repo = ReviewRepository()
 repo_repo = RepoRepository()
+
+# The whole job — PR fetch, clone and analysis, graph — runs inside this
+# budget (I-7), below Arq's job_timeout (240 s, app/worker.py), so a slow
+# review ends as a recorded timeout instead of being killed by Arq. The
+# graph alone still has review_latency_budget_seconds inside it.
+JOB_BUDGET_SECONDS = 220
+
+# Per-job heartbeat (I-4): reconciliation treats a running review with no
+# fresh key as orphaned, so a new worker never fails the old one's jobs.
+HEARTBEAT_INTERVAL_SECONDS = 10
+HEARTBEAT_TTL_SECONDS = 30
+WORKER_ID = f"{socket.gethostname()}:{os.getpid()}"
+
+
+async def _heartbeat(redis, review_id: str) -> None:
+    key = f"review_hb:{review_id}"
+    while True:
+        try:
+            await redis.setex(key, HEARTBEAT_TTL_SECONDS, WORKER_ID)
+        except Exception:
+            logger.warning("Heartbeat write failed for %s", review_id, exc_info=True)
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+
+
+class _CheckRun:
+    """The review's "Ignition" check run (audit P0-6). Every exit of
+    run_review_job concludes it exactly once; run_review_job's finally
+    concludes it as a fallback if an exit path somehow didn't."""
+
+    def __init__(self, event: PullRequestWebhook, review_id: str):
+        self._event = event
+        self._review_id = review_id
+        self.concluded = False
+
+    async def conclude(self, conclusion: str, title: str, summary: str | None = None,
+                       details_url: str | None = None) -> None:
+        self.concluded = True
+        await check_runs.conclude_check_run(
+            reviews=review_repo, review_id=self._review_id,
+            installation_id=self._event.installation.id,
+            repo=self._event.repository.full_name,
+            head_sha=self._event.pull_request.head_sha,
+            conclusion=conclusion, title=title, summary=summary or title, details_url=details_url,
+        )
+
+    async def could_not_finish(self, status_reason: str) -> None:
+        await self.conclude("neutral", check_runs.could_not_finish_title(status_reason))
+
+
+async def _cancel_as_superseded(review_id: str, newer_sha: str, check: _CheckRun) -> None:
+    """A newer push made this review's commit stale (audit P1-8): record why
+    and close the dashboard's stream; nothing is posted to the PR."""
+    status_reason = f"superseded by {newer_sha}"
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "cancelled", "status_reason": status_reason})
+    await stream_manager.publish(
+        review_id, {"type": "review.failed", "reviewId": review_id, "status": "cancelled"}
+    )
+    await check.could_not_finish(status_reason)
+
+
+def timed_out_comment(budget_s: str, verified: list) -> str:
+    """The sticky comment for a review cut off by its time budget (P2): the
+    findings the Critic verified, if it got that far, under a heading that
+    says the review is incomplete. Never reads as a clean pass."""
+    lines = [
+        "## Ignition Review — incomplete",
+        "",
+        f"This review timed out after {budget_s} s, so it is incomplete. "
+        "Push again or re-run the check to get a full review.",
+        "",
+    ]
+    if not verified:
+        lines.append("No findings were verified before the timeout. That is not a clean pass: "
+                     "parts of this PR were not reviewed.")
+    else:
+        lines.append(f"Verified before the timeout ({len(verified)}):")
+        lines.append("")
+        for f in verified:
+            location = f"{f.file_path}:{f.line}" if f.line else f.file_path
+            description = sanitize_narrative(f.description).replace("\n", " ")
+            lines.append(f"- **{f.severity}** `{location}`: {description}")
+    return "\n".join(lines)
+
+
+async def _post_incomplete_comment(event: PullRequestWebhook, markdown: str, review_id: str) -> None:
+    """Best effort, and only if the PR's head hasn't moved (same rule as
+    finalize_and_post, P1-8): a newer push owns the sticky comment."""
+    from app.services.github_client import GitHubClient
+
+    def post():
+        gh = GitHubClient(installation_id=event.installation.id)
+        head = event.pull_request.head_sha
+        if head:
+            current = gh.get_pr_head_sha(event.repository.full_name, event.pull_request.number)
+            if current and current != head:
+                return False
+        gh.upsert_sticky_comment(repo_full_name=event.repository.full_name, pr_number=event.pull_request.number,
+                                 body=markdown, bot_login=gh.bot_login)
+        return True
+
+    try:
+        await asyncio.to_thread(post)
+    except Exception:
+        logger.exception("Could not post the incomplete-review comment", extra={"review_id": review_id})
 
 
 def parse_diff(diff_text: str) -> tuple[int, int, int, list[dict]]:
@@ -120,6 +229,55 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     """
     set_correlation_id(correlation_id)
     event = PullRequestWebhook.model_validate(event_payload)
+    check = _CheckRun(event, review_id)
+    exit_reason = "unexpected exit"
+    redis = ctx.get("redis")  # Arq's connection; absent when called directly
+    heartbeat = asyncio.create_task(_heartbeat(redis, review_id)) if redis is not None else None
+    budget = asyncio.timeout(JOB_BUDGET_SECONDS)
+    try:
+        async with budget:
+            await _review_job_body(event, review_id, check, budget)
+    except TimeoutError:
+        # The whole-job budget ran out (I-7). The body records it when the
+        # cut lands inside its main try; otherwise (e.g. a hung PR fetch)
+        # it is recorded here. Either way the job ends normally for Arq.
+        if not check.concluded:
+            metrics.reviews_completed_total.labels(status="timed_out").inc()
+            await _record_job_timeout(review_id, check)
+    except BaseException as exc:
+        exit_reason = f"failed: {type(exc).__name__}"
+        raise
+    finally:
+        # Fallback only: every exit inside the body concludes the check
+        # itself. This catches anything that escapes them (audit P0-6).
+        if not check.concluded:
+            await check.could_not_finish(exit_reason)
+        if heartbeat is not None:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
+            try:
+                await redis.delete(f"review_hb:{review_id}")
+            except Exception:
+                logger.warning("Could not clear the heartbeat for %s", review_id, exc_info=True)
+
+
+def _job_timeout_reason() -> str:
+    return f"timed out — exceeded the job budget ({JOB_BUDGET_SECONDS}s)"
+
+
+async def _record_job_timeout(review_id: str, check: _CheckRun) -> None:
+    status_reason = _job_timeout_reason()
+    logger.warning("Review %s %s", review_id, status_reason)
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
+    await stream_manager.publish(review_id, {"type": "review.failed", "reviewId": review_id, "status": "failed"})
+    await check.could_not_finish(status_reason)
+
+
+async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _CheckRun,
+                           budget: "asyncio.Timeout | None" = None) -> None:
     logger.info("Starting background review", extra={"review_id": review_id})
     _job_start_time = time.monotonic()
 
@@ -131,21 +289,65 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         metrics.reviews_completed_total.labels(status=status).inc()
         metrics.review_duration_seconds.observe(time.monotonic() - _job_start_time)
 
+    # 0. The repo's settings (audit P1-5), before anything touches GitHub,
+    # the analyzer or an LLM. Unreadable settings fail closed: the owner
+    # may have turned AI review off, so the code is not sent anywhere.
+    try:
+        # By GitHub's numeric repository id (P2 repo IDs).
+        cfg = await asyncio.to_thread(repo_repo.get_or_create_settings, event.repository.id,
+                                      event.repository.full_name)
+    except Exception:
+        logger.exception("Could not load repo settings", extra={"review_id": review_id})
+        status_reason = "failed: could not load repo settings"
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
+        await stream_manager.publish(review_id, {"type": "review.failed", "reviewId": review_id, "status": "failed"})
+        _record_terminal_metric("failed")
+        await check.could_not_finish(status_reason)
+        return
+    if not cfg.get("enable_ai_review", True):
+        logger.info("AI review disabled for this repo", extra={"review_id": review_id})
+        await asyncio.to_thread(review_repo.update_review,
+            review_id, {"status": "completed", "status_reason": "AI review disabled for this repo"}
+        )
+        await stream_manager.publish(
+            review_id, {"type": "review.completed", "reviewId": review_id, "status": "completed"}
+        )
+        _record_terminal_metric("completed")
+        await check.conclude("neutral", "AI review disabled for this repo")
+        return
+    enabled_agents = [agent for agent, flag in (
+        ("agent_2a_struct", cfg.get("architecture_scan", True)),
+        ("agent_2b_chaos", cfg.get("logic_scan", True)),
+        ("agent_2c_security", cfg.get("security_scan", True)),
+    ) if flag]
+    enable_auto_fix = bool(cfg.get("enable_auto_fix", False))
+
     # 1. Reconstruct pull request info from GitHub Integration
     title = f"PR #{event.pull_request.number}"
     author = "unknown"
     branch = "main"
     gh = None
+    current_head = None
+
+    def _fetch_pr():
+        from app.services.github_client import GitHubClient
+        client = GitHubClient(installation_id=event.installation.id)
+        pr = client._client.get_repo(event.repository.full_name).get_pull(event.pull_request.number)
+        return client, pr.title, pr.user.login, pr.head.ref, pr.head.sha
 
     try:
-        from app.services.github_client import GitHubClient
-        gh = GitHubClient(installation_id=event.installation.id)
-        pr = gh._client.get_repo(event.repository.full_name).get_pull(event.pull_request.number)
-        title = pr.title
-        author = pr.user.login
-        branch = pr.head.ref
+        # PyGithub is synchronous: off the event loop (audit P1-7).
+        gh, title, author, branch, current_head = await asyncio.to_thread(_fetch_pr)
     except Exception as e:
         logger.exception("Failed to fetch PR info from GitHub API: %s", e)
+
+    # A newer push already superseded this commit (audit P1-8): don't
+    # analyse a stale SHA. The newer push has its own job.
+    if current_head and current_head != event.pull_request.head_sha:
+        logger.info("Review superseded before analysis", extra={"review_id": review_id})
+        await _cancel_as_superseded(review_id, current_head, check)
+        _record_terminal_metric("cancelled")
+        return
 
     # Fetch Unified Diff
     diff_text = ""
@@ -153,30 +355,25 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
 
     if gh:
         try:
-            diff_text = gh.get_pr_diff(event.repository.full_name, event.pull_request.number)
+            diff_text = await asyncio.to_thread(gh.get_pr_diff, event.repository.full_name, event.pull_request.number)
             _, _, _, parsed_diffs = parse_diff(diff_text)
         except Exception as e:
             logger.exception("Failed to fetch PR diff: %s", e)
 
-    # Determine previous ACS score for regression tracking
+    # The repo's merge baseline (audit P0-7): the same median of recent
+    # merged PRs that the Critic's regression flag compares against, so the
+    # dashboard and the flag agree. 100.0 when the repo has no baseline yet
+    # (the regression flag can't fire then).
     previous_acs_score = 100.0
     try:
-        latest_completed_res = (
-            review_repo._db.table("reviews")
-            .select("acs_score")
-            .eq("repo_full_name", event.repository.full_name)
-            .eq("status", "completed")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if latest_completed_res.data and latest_completed_res.data[0].get("acs_score") is not None:
-            previous_acs_score = float(latest_completed_res.data[0]["acs_score"])
+        baseline = await asyncio.to_thread(LedgerRepository().get_baseline, event.repository.full_name)
+        if baseline:
+            previous_acs_score = float(baseline["acs_score"])
     except Exception as e:
-        logger.warning("Could not query baseline review: %s", e)
+        logger.warning("Could not read the regression baseline: %s", e)
 
     # Save initial metadata
-    review_repo.update_review(
+    await asyncio.to_thread(review_repo.update_review,
         review_id,
         {
             "status": "running",
@@ -238,8 +435,14 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             "findingCount": 0,
         },
     }
+    # A scan or auto-fix that's off for this repo gets no timeline row (P1-5).
+    for agent_id in ("agent_2a_struct", "agent_2b_chaos", "agent_2c_security"):
+        if agent_id not in enabled_agents:
+            del agents_progress[agent_id]
+    if not enable_auto_fix:
+        del agents_progress["agent_4_autofix"]
 
-    review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+    await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
     await stream_manager.publish(
         review_id,
         {
@@ -249,6 +452,9 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         },
     )
 
+    # What the check run's conclusion is built from (audit P0-6).
+    outcome: dict = {"findings": [], "incomplete": False, "rejection_reason": None, "verified": []}
+
     try:
         # 2. Build Graph State
         ast_payload = await ast_client.analyze_git(
@@ -257,10 +463,14 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             clone_url=event.repository.clone_url,
             ref=event.pull_request.head_sha,
             base_ref=event.pull_request.base_sha,
+            auth_token=gh.installation_token if gh else None,
         )
 
         initial_state = ReviewState.from_ast_payload(ast_payload, event)
         initial_state.diff_text = diff_text
+        initial_state.enabled_agents = enabled_agents
+        initial_state.enable_hitl = bool(cfg.get("enable_hitl", True))
+        initial_state.enable_auto_fix = enable_auto_fix
 
         # 3. Stream graph steps, bounded by review_latency_budget_seconds —
         # wraps ONLY the graph execution (not the diff fetch above it), per
@@ -277,10 +487,11 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         # workflow.py), so there's no re-entry case to
                         # detect here any more.
                         violation = node_output.get("hard_rule_violation", False)
+                        outcome["rejection_reason"] = node_output.get("rejection_reason")
                         agents_progress["agent_1_gate"]["status"] = "completed"
                         agents_progress["agent_1_gate"]["findingCount"] = 1 if violation else 0
 
-                        review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -293,7 +504,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
 
                         if not violation:
                             # Fan out parallel specialists
-                            for agent_id in ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]:
+                            for agent_id in enabled_agents:
                                 agents_progress[agent_id]["status"] = "running"
                                 await stream_manager.publish(
                                     review_id,
@@ -303,7 +514,12 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                         "agentId": agent_id,
                                     },
                                 )
-                            review_repo.update_review(
+                            if not enabled_agents:  # every scan off: straight to the Critic (P1-5)
+                                agents_progress["agent_3_critic"]["status"] = "running"
+                                await stream_manager.publish(
+                                    review_id, {"type": "critic.started", "reviewId": review_id}
+                                )
+                            await asyncio.to_thread(review_repo.update_review,
                                 review_id, {"agents": list(agents_progress.values())}
                             )
 
@@ -312,7 +528,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         agents_progress[node_name]["status"] = "completed"
                         agents_progress[node_name]["findingCount"] = len(findings)
 
-                        review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -325,13 +541,11 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
 
                         # Trigger Critic if specialists are done
                         if (
-                            agents_progress["agent_2a_struct"]["status"] == "completed"
-                            and agents_progress["agent_2b_chaos"]["status"] == "completed"
-                            and agents_progress["agent_2c_security"]["status"] == "completed"
+                            all(agents_progress[a]["status"] == "completed" for a in enabled_agents)
                             and agents_progress["agent_3_critic"]["status"] == "pending"
                         ):
                             agents_progress["agent_3_critic"]["status"] = "running"
-                            review_repo.update_review(
+                            await asyncio.to_thread(review_repo.update_review,
                                 review_id, {"agents": list(agents_progress.values())}
                             )
                             await stream_manager.publish(
@@ -345,6 +559,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                     elif node_name == "agent_3_critic":
                         agents_progress["agent_3_critic"]["status"] = "completed"
                         verified = node_output.get("verified_findings", [])
+                        outcome["verified"] = verified  # posted if the review then times out (P2)
                         findings_count = len(verified)
                         agents_progress["agent_3_critic"]["findingCount"] = findings_count
 
@@ -352,6 +567,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         hitl_severity = node_output.get("hitl_severity", "none")
                         is_regression = node_output.get("is_regression", False)
                         final_comment = node_output.get("final_comment_markdown")
+                        review_incomplete = node_output.get("review_incomplete", False)
 
                         # Map verified findings to schema format
                         mapped_findings = []
@@ -370,6 +586,9 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "patternKey": f.pattern_key,
                             })
 
+                        outcome["findings"] = mapped_findings
+                        outcome["incomplete"] = review_incomplete
+
                         regression_alert = {
                             "isRegression": is_regression,
                             "ruleRegressed": "ACS Score Drop" if is_regression else None,
@@ -381,7 +600,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             else None,
                         }
 
-                        review_repo.update_review(
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
                                 "agents": list(agents_progress.values()),
@@ -392,6 +611,10 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "final_comment_markdown": final_comment,
                                 "regression": regression_alert,
                                 "severity": hitl_severity,
+                                # Surfaced on the dashboard; never shown as a clean pass.
+                                "status_reason": "incomplete: one or more agents failed"
+                                if review_incomplete
+                                else None,
                             },
                         )
 
@@ -434,7 +657,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             agents_progress["agent_2a_struct"]["findingCount"] = 0
                             agents_progress["agent_3_critic"]["status"] = "pending"
                             agents_progress["agent_3_critic"]["findingCount"] = 0
-                            review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                            await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                             await stream_manager.publish(
                                 review_id,
                                 {
@@ -445,7 +668,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             )
 
                     elif node_name == "pause_for_human_approval":
-                        review_repo.update_review(review_id, {"status": "waiting_hitl"})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "waiting_hitl"})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -464,6 +687,11 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         # however long the review sat waiting on a human,
                         # which isn't graph execution time.
                         _record_terminal_metric("waiting_hitl")
+                        await check.conclude(
+                            "action_required", "Waiting for human review",
+                            summary="A finding needs a maintainer's approval before Ignition posts its review.",
+                            details_url=f"{settings.frontend_base_url}/reviews/{review_id}",
+                        )
 
                     elif node_name == "agent_4_autofix":
                         agents_progress["agent_4_autofix"]["status"] = "completed"
@@ -474,7 +702,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         failed = node_output.get("autofix_failed", 0)
                         agents_progress["agent_4_autofix"]["findingCount"] = posted
 
-                        review_repo.update_review(
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
                                 "agents": list(agents_progress.values()),
@@ -493,15 +721,34 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         )
 
                     elif node_name == "finalize_and_post":
-                        review_repo.update_review(review_id, {"status": "completed"})
+                        superseded_by = (node_output or {}).get("superseded_by")
+                        if superseded_by:
+                            await _cancel_as_superseded(review_id, superseded_by, check)
+                            _record_terminal_metric("cancelled")
+                            continue
+                        # The review itself succeeded even if its PR comment
+                        # didn't post (P2 partial success); the check run
+                        # then carries the result.
+                        posted = (node_output or {}).get("comment_posted") is not False
+                        update = {"status": "completed"}
+                        if not posted:
+                            update["status_reason"] = "comment not posted"
+                        await asyncio.to_thread(review_repo.update_review, review_id, update)
+                        conclusion, title = check_runs.posted_outcome(outcome["findings"], outcome["incomplete"])
+                        db_comment = (await asyncio.to_thread(review_repo.get_review, review_id) or {}).get("final_comment_markdown")
+                        summary = db_comment or title
+                        if not posted:
+                            summary = ("The review comment could not be posted to this PR; "
+                                       "the review is below.\n\n" + summary)
+                        await check.conclude(conclusion, title, summary=summary)
 
                         # Update Repository baseline stats
-                        db_rev = review_repo.get_review(review_id)
+                        db_rev = await asyncio.to_thread(review_repo.get_review, review_id)
                         final_acs = db_rev.get("acs_score") if db_rev else 100.0
-                        repo_repo.update_repo_stats(
+                        await asyncio.to_thread(repo_repo.update_repo_stats,
                             repo_full_name=event.repository.full_name,
                             acs_score=final_acs,
-                            last_review_at=datetime.utcnow().isoformat() + "Z",
+                            last_review_at=datetime.now(timezone.utc).isoformat(),
                         )
 
                         await stream_manager.publish(
@@ -515,10 +762,17 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         _record_terminal_metric("completed")
 
                     elif node_name == "direct_rejection":
-                        review_repo.update_review(
+                        node_output = node_output or {}
+                        if node_output.get("superseded_by"):
+                            await _cancel_as_superseded(review_id, node_output["superseded_by"], check)
+                            _record_terminal_metric("cancelled")
+                            continue
+                        # Posted on the PR by the node (sticky comment) and
+                        # recorded as "rejected", not "completed" (audit P0-6).
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
-                                "status": "completed",  # or rejected
+                                "status": "rejected",
                                 "final_comment_markdown": node_output.get("final_comment_markdown"),
                             },
                         )
@@ -527,47 +781,46 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             {
                                 "type": "review.completed",
                                 "reviewId": review_id,
-                                "status": "completed",
+                                "status": "rejected",
                             },
                         )
-                        _record_terminal_metric("completed")
+                        _record_terminal_metric("rejected")
+                        await check.conclude(
+                            "failure", f"Hard rule violated: {outcome['rejection_reason']}",
+                            summary=node_output.get("final_comment_markdown"),
+                        )
 
         try:
             await asyncio.wait_for(_stream_graph(), timeout=settings.review_latency_budget_seconds)
         except asyncio.TimeoutError:
-            # The PRD's bounded self-correction principle (hallucination retries'
-            # give up after a cap and flag for human) applied to wall-clock time
-            # instead of retry count: don't leave the review hanging, don't just
-            # silently drop it — force it into the same human-escalation terminal
-            # state the graph already uses for a critical HITL gate
-            # (route_hitl -> pause_for_human_approval in app/graph/routing.py),
-            # since a timed-out review inherently has unverified/incomplete state
-            # that a human should look at, not an automated pass/fail verdict.
-            logger.warning(
-                "Review %s exceeded latency budget (%ds) — flagging for human review",
-                review_id, settings.review_latency_budget_seconds,
-            )
-            review_repo.update_review(
+            # Not routed to HITL (P2 "Timeout posts an empty approval"): there
+            # is nothing complete for a human to approve. The review ends
+            # failed, the PR's sticky comment shows what the Critic verified
+            # before the cut-off, marked incomplete, and the check is neutral.
+            budget_s = f"{settings.review_latency_budget_seconds:g}"
+            status_reason = f"timed out after {budget_s} s"
+            logger.warning("Review %s timed out after %s s", review_id, budget_s)
+            markdown = timed_out_comment(budget_s, outcome["verified"])
+            await asyncio.to_thread(review_repo.update_review,
                 review_id,
-                {
-                    "status": "waiting_hitl",
-                    "hitl_severity": "critical",
-                    "severity": "critical",
-                    "status_reason": f"timed out — exceeded review_latency_budget_seconds ({settings.review_latency_budget_seconds}s)",
-                },
+                {"status": "failed", "status_reason": status_reason, "final_comment_markdown": markdown},
             )
+            await _post_incomplete_comment(event, markdown, review_id)
             await stream_manager.publish(
                 review_id,
-                {
-                    "type": "waiting.hitl",
-                    "reviewId": review_id,
-                    "status": "waiting_hitl",
-                },
+                {"type": "review.failed", "reviewId": review_id, "status": "failed"},
             )
             _record_terminal_metric("timed_out")
+            await check.conclude("neutral", check_runs.could_not_finish_title(status_reason), summary=markdown)
             return
 
     except asyncio.CancelledError:
+        if budget is not None and budget.expired():
+            # Not a shutdown: the whole-job budget (I-7) cancelled us.
+            # asyncio.timeout turns this into TimeoutError on the way out.
+            _record_terminal_metric("timed_out")
+            await _record_job_timeout(review_id, check)
+            raise
         # Arq cancels this task when a SIGTERM's graceful-drain window
         # (WorkerSettings.job_completion_wait, app/worker.py) expires
         # before the job finished. This is the precise counterpart to
@@ -578,13 +831,8 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         # shutdown. Must re-raise — swallowing CancelledError would break
         # Arq's own shutdown bookkeeping.
         logger.warning("Review %s cancelled — shutdown drain timeout exceeded", review_id)
-        review_repo.update_review(
-            review_id,
-            {
-                "status": "failed",
-                "status_reason": "interrupted — graceful shutdown drain timeout exceeded",
-            },
-        )
+        status_reason = "interrupted — graceful shutdown drain timeout exceeded"
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
@@ -594,10 +842,12 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             },
         )
         _record_terminal_metric("cancelled")
+        await check.could_not_finish(status_reason)
         raise
     except Exception as exc:
         logger.exception("LangGraph execution failed: %s", exc)
-        review_repo.update_review(review_id, {"status": "failed"})
+        status_reason = f"failed: {type(exc).__name__}"
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
@@ -607,3 +857,4 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             },
         )
         _record_terminal_metric("failed")
+        await check.could_not_finish(status_reason)

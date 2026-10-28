@@ -36,7 +36,8 @@ def get_pubsub_redis() -> "redis.Redis":
     enqueue/status, this one is for stream_manager's pub/sub, and mixing
     them would couple two independent concerns for no benefit."""
     settings = get_settings()
-    return redis.from_url(settings.redis_url, decode_responses=True)
+    # Every open SSE stream holds a pub/sub connection; cap the pool (I-8).
+    return redis.from_url(settings.redis_url, decode_responses=True, max_connections=100)
 
 
 @lru_cache

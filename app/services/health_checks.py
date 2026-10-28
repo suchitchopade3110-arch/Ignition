@@ -1,7 +1,9 @@
 """
-Real dependency reachability checks for /healthz (app/main.py). Three
-explicit checks, each with its own timeout — not a health-check framework,
-just plain async functions gathered together.
+Real dependency reachability checks for /readyz (app/main.py; I-5 renamed
+it from /healthz and gave the platform a dependency-free /livez). Explicit
+checks, each with its own timeout — not a health-check framework, just
+plain async functions gathered together. Errors report only the exception
+class name: str(e) can carry URLs, keys or response bodies.
 """
 import asyncio
 import time
@@ -39,7 +41,7 @@ async def check_supabase() -> dict:
     except asyncio.TimeoutError:
         return _result("unhealthy", int((time.monotonic() - start) * 1000), "timed out")
     except Exception as e:
-        return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), type(e).__name__)
 
 
 async def check_ast_analyzer() -> dict:
@@ -58,7 +60,7 @@ async def check_ast_analyzer() -> dict:
             "unhealthy", int((time.monotonic() - start) * 1000), f"HTTP {response.status_code}"
         )
     except Exception as e:
-        return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), type(e).__name__)
 
 
 async def check_llm_provider() -> dict:
@@ -68,19 +70,27 @@ async def check_llm_provider() -> dict:
     not a second instance just for health checks."""
     start = time.monotonic()
     try:
-        client = get_llm_client().raw_client
-        await asyncio.wait_for(client.models.list(), timeout=_CHECK_TIMEOUT_SECONDS)
+        llm = get_llm_client()
+        models = await asyncio.wait_for(llm.raw_client.models.list(), timeout=_CHECK_TIMEOUT_SECONDS)
+        available = {m.id for m in getattr(models, "data", [])}
+        # Reachable is not enough: the configured model must still exist,
+        # or every completion fails while this stays green (audit P0-1).
+        if llm.model not in available:
+            return _result(
+                "unhealthy", int((time.monotonic() - start) * 1000),
+                f"configured model {llm.model!r} not offered by provider",
+            )
         return _result("healthy", int((time.monotonic() - start) * 1000))
     except asyncio.TimeoutError:
         return _result("unhealthy", int((time.monotonic() - start) * 1000), "timed out")
     except Exception as e:
-        return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), type(e).__name__)
 
 
 async def check_redis() -> dict:
     """Was missing entirely — the app is fully dependent on Redis (the Arq
     job queue AND the SSE pub/sub backbone in stream_manager.py), so a
-    "healthy" /healthz that never actually checked it could report green
+    "healthy" /readyz that never actually checked it could report green
     while every webhook enqueue and every live SSE stream was silently
     broken. Uses the same shared pub/sub client the rest of the app uses
     (app/services/redis_client.py::get_pubsub_redis) rather than opening a
@@ -93,7 +103,7 @@ async def check_redis() -> dict:
     except asyncio.TimeoutError:
         return _result("unhealthy", int((time.monotonic() - start) * 1000), "timed out")
     except Exception as e:
-        return _result("unhealthy", int((time.monotonic() - start) * 1000), str(e))
+        return _result("unhealthy", int((time.monotonic() - start) * 1000), type(e).__name__)
 
 
 async def run_health_checks() -> tuple[dict, bool]:

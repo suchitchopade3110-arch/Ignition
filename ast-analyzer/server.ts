@@ -10,19 +10,17 @@
  * remote (HTTPS recommended — SSH requires a mounted key) or a zip URL.
  */
 import { Elysia } from "elysia";
-import type { Project } from "ts-morph";
 import { analyzePullRequest } from "./analyzer";
 import type { AnalyzeSource } from "./source";
 
-const projectCache = new Map<string, Project>();
-
 const app = new Elysia()
   .post("/analyze", async ({ body, set }) => {
-    const { repo_full_name, pr_number, source, base_sha } = body as {
+    const { repo_full_name, pr_number, source, base_sha, auth_token } = body as {
       repo_full_name: string;
       pr_number: number;
       source: AnalyzeSource;
       base_sha: string;
+      auth_token?: string;
     };
 
     if (!source || (source.type !== "git" && source.type !== "zip")) {
@@ -36,7 +34,7 @@ const app = new Elysia()
         prNumber: pr_number,
         source,
         baseRef: base_sha,
-        projectCache,
+        authToken: auth_token,
       });
     } catch (err) {
       set.status = 500;

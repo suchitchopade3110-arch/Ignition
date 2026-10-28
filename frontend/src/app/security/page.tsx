@@ -22,7 +22,7 @@ const practices = [
   },
   {
     title: "Least-privilege GitHub App access",
-    body: "Ignition authenticates to your repositories as a GitHub App, using short-lived installation tokens rather than a long-lived personal access token. Access is scoped to the repositories you explicitly install the app on.",
+    body: "Ignition authenticates to your repositories as a GitHub App, using short-lived installation tokens rather than a long-lived personal access token. Access is scoped to the repositories you explicitly install the app on. Dashboard sign-in uses the same GitHub App: it asks for no OAuth scopes, so your sign-in token can only do what the app's permissions allow, on repositories where it is installed. That token is encrypted at rest, refreshed when it expires, and revoked when you sign out.",
   },
   {
     title: "Secrets are never in source control",
@@ -40,7 +40,7 @@ export default function SecurityPage() {
           <h1 className="text-h2 text-surface-dark-fg mb-4">Security</h1>
           <p className="text-sm text-surface-dark-muted leading-relaxed mb-16 max-w-xl">
             Ignition reads and comments on your pull requests, which means it needs access to your
-            code. Here's what we actually do to protect that access — and how to reach us if you
+            code. Here&apos;s what we actually do to protect that access — and how to reach us if you
             find a problem.
           </p>
 
@@ -68,7 +68,7 @@ export default function SecurityPage() {
               Reporting a vulnerability
             </h2>
             <p className="text-sm text-surface-dark-muted leading-relaxed mb-3">
-              If you find a security issue in Ignition, please don't open a public GitHub issue.
+              If you find a security issue in Ignition, please don&apos;t open a public GitHub issue.
               Email{" "}
               <a
                 href="mailto:suchitchopade3110@gmail.com"
@@ -94,12 +94,12 @@ export default function SecurityPage() {
           </section>
 
           <section>
-            <h2 className="text-lg font-semibold text-surface-dark-fg mb-4">What's next</h2>
+            <h2 className="text-lg font-semibold text-surface-dark-fg mb-4">What&apos;s next</h2>
             <p className="text-sm text-surface-dark-muted leading-relaxed">
               This page describes the mechanisms in place today. It is not a compliance
-              certification (SOC 2, ISO 27001, etc.) — we're an early-stage product and don't
+              certification (SOC 2, ISO 27001, etc.) — we&apos;re an early-stage product and don&apos;t
               claim one. If a formal certification matters for your organization, reach out and
-              we'll let you know where things stand.
+              we&apos;ll let you know where things stand.
             </p>
           </section>
         </div>

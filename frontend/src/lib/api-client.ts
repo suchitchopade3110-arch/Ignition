@@ -177,7 +177,9 @@ class ApiClient {
         signal: controller.signal,
         credentials: "include", // Send session cookie across requests
         headers: {
-          "Content-Type": "application/json",
+          // Only with a body (P2): on a bodiless request the header makes
+          // it non-simple, which costs a CORS preflight cross-origin.
+          ...(fetchOptions.body != null ? { "Content-Type": "application/json" } : {}),
           ...csrfHeaders,
           ...fetchOptions.headers,
         },

@@ -43,11 +43,20 @@ class Settings(BaseModel):
     # secret stays valid.
     github_webhook_secret_previous: str = ""
 
-    # GitHub OAuth (Sign in with GitHub) — separate credential pair from the
+    # Dashboard login (Sign in with GitHub) uses the GitHub App's own OAuth
+    # client id/secret (audit P1-1) — a separate credential pair from the
     # App's private key above. Used only for user login/session, never for
     # server-to-server installation calls.
+    # The App's URL slug; its comments are authored by "<slug>[bot]". Used to
+    # find Ignition's own sticky comment (audit P1-8). Blank = ask GitHub.
+    github_app_slug: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
+    # Comma-separated Fernet keys that encrypt users' GitHub tokens at rest
+    # (audit P1-1). The first key encrypts; every key decrypts, so listing
+    # a new key first and the old one second rotates without logging
+    # anyone out. Required for login: with none set, login fails closed.
+    session_token_keys: str = ""
 
     # Session cookies issued after OAuth login
     session_cookie_name: str = "ignition_session"
@@ -70,10 +79,15 @@ class Settings(BaseModel):
     csrf_header_name: str = "X-CSRF-Token"
 
     # Prometheus /metrics endpoint (app/services/metrics.py). Unauthenticated
-    # like /healthz — same reasoning: a scraper needs to reach it without a
+    # behind METRICS_TOKEN (I-11) — a scraper needs to reach it without a
     # session. Defaults on; set false to omit the endpoint entirely rather
     # than exposing operational metrics on a deployment that doesn't want them.
     metrics_enabled: bool = True
+    # Bearer token for GET /readyz, the deep dependency check (I-5). Unset:
+    # /readyz is 404 in production and open in development.
+    readyz_token: str = ""
+    # Bearer token for GET /metrics (I-11), same rule as readyz_token.
+    metrics_token: str = ""
 
     # Used to build the OAuth redirect_uri and the post-login redirect target
     backend_base_url: str = "http://localhost:8000"
@@ -83,6 +97,10 @@ class Settings(BaseModel):
     llm_provider: str = ""
     llm_api_key: str = ""
     llm_model_name: str = ""
+    # Model-specific knob, not hard-coded in llm_client (audit P0-1):
+    # gpt-oss accepts low|medium|high, qwen3.x accepts none|default. Empty
+    # string omits the parameter entirely.
+    llm_reasoning_effort: str = ""
 
     # Supabase / pgvector
     supabase_url: str = ""
@@ -157,8 +175,10 @@ class Settings(BaseModel):
             github_webhook_secret_previous=kwargs.get(
                 "github_webhook_secret_previous", os.getenv("GITHUB_WEBHOOK_SECRET_PREVIOUS", "")
             ),
+            github_app_slug=kwargs.get("github_app_slug", os.getenv("GITHUB_APP_SLUG", "")),
             github_client_id=kwargs.get("github_client_id", os.getenv("GITHUB_CLIENT_ID", "")),
             github_client_secret=kwargs.get("github_client_secret", os.getenv("GITHUB_CLIENT_SECRET", "")),
+            session_token_keys=kwargs.get("session_token_keys", os.getenv("SESSION_TOKEN_KEYS", "")),
             session_cookie_name=kwargs.get("session_cookie_name", os.getenv("SESSION_COOKIE_NAME", "ignition_session")),
             session_ttl_seconds=int(kwargs.get("session_ttl_seconds", os.getenv("SESSION_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
             session_cookie_secure=str(kwargs.get("session_cookie_secure", os.getenv("SESSION_COOKIE_SECURE", "false"))).lower() in ("1", "true", "yes"),
@@ -166,11 +186,14 @@ class Settings(BaseModel):
             csrf_cookie_name=kwargs.get("csrf_cookie_name", os.getenv("CSRF_COOKIE_NAME", "ignition_csrf_token")),
             csrf_header_name=kwargs.get("csrf_header_name", os.getenv("CSRF_HEADER_NAME", "X-CSRF-Token")),
             metrics_enabled=str(kwargs.get("metrics_enabled", os.getenv("METRICS_ENABLED", "true"))).lower() in ("1", "true", "yes"),
+            readyz_token=kwargs.get("readyz_token", os.getenv("READYZ_TOKEN", "")),
+            metrics_token=kwargs.get("metrics_token", os.getenv("METRICS_TOKEN", "")),
             backend_base_url=kwargs.get("backend_base_url", os.getenv("BACKEND_BASE_URL", "http://localhost:8000")),
             frontend_base_url=kwargs.get("frontend_base_url", os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")),
-            llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "qwen")),
+            llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "groq")),
             llm_api_key=kwargs.get("llm_api_key", os.getenv("LLM_API_KEY", "")),
-            llm_model_name=kwargs.get("llm_model_name", os.getenv("LLM_MODEL_NAME", "qwen-3-480b")),
+            llm_model_name=kwargs.get("llm_model_name", os.getenv("LLM_MODEL_NAME", "openai/gpt-oss-120b")),
+            llm_reasoning_effort=kwargs.get("llm_reasoning_effort", os.getenv("LLM_REASONING_EFFORT", "low")),
             supabase_url=kwargs.get("supabase_url", os.getenv("SUPABASE_URL", "")),
             supabase_key=kwargs.get("supabase_key", os.getenv("SUPABASE_SERVICE_KEY", "")),
             ast_service_url=kwargs.get("ast_service_url", os.getenv("AST_SERVICE_URL", "http://localhost:4000")),

@@ -30,18 +30,12 @@ name: CI
 # credentials are configured here (this repo has none), and catching a
 # broken build doesn't require one.
 #
-# The `dependency-audit` job scans every dependency tree for known CVEs —
-# previously nothing did this at all (Dependabot, added alongside this
-# workflow in .github/dependabot.yml, opens update PRs but doesn't gate
-# CI). `pip-audit` against requirements.txt is blocking: the backend tree
-# is clean today, and a hashed/pinned lockfile means a new finding only
-# shows up when something actually changes, so there's no noise to
-# tolerate. `npm audit` and `bun audit` run informational-only
-# (continue-on-error) for now — both frontend and ast-analyzer currently
-# carry pre-existing high-severity advisories in transitive deps (next,
-# postcss, sharp, js-yaml, fast-uri, brace-expansion) that need triage
-# before this can block merges without immediately going red; the job
-# still surfaces them in every run's logs so they can't go unnoticed.
+# The `dependency-audit` job scans every dependency tree for known CVEs,
+# and every audit in it blocks (I-12): `npm audit --audit-level=high`
+# (frontend), `bun audit --audit-level=high` (ast-analyzer), and pip-audit
+# on requirements.txt via scripts/run_pip_audit.py, which skips only the
+# IDs in .github/pip-audit-ignore.txt (each with a written reason).
+# Dependabot (.github/dependabot.yml) opens the update PRs.
 #
 # The `golden-eval` job runs scripts/run_golden_eval.py (tests/eval/) —
 # the review-quality harness (precision/recall against the hand-labeled
@@ -86,12 +80,24 @@ jobs:
 
       # Installs from the fully pinned, hashed requirements.txt (not
       # requirements.in) — reproducible dependency tree, same one a fresh
-      # `pip install -r requirements.txt` produces locally.
+      # `pip install -r requirements.txt` produces locally. Test-only
+      # packages (pytest, pytest-asyncio) live in requirements-dev.txt so
+      # they stay out of the production image.
+      # I-2: torch's CUDA wheels must never come back into the lockfile.
+      - name: No CUDA wheels in the lockfile
+        run: "! grep -E '^(nvidia-|triton|cuda-)' requirements.txt"
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
         run: pytest tests/ -v
+
+      # The real embedding model (downloaded here; CI can reach Hugging Face).
+      - name: Embedder smoke test (real model)
+        env:
+          IGNITION_LIVE_MODEL_TESTS: "1"
+        run: pytest tests/test_fastembed_embedder.py -v -k real_model
 
   frontend:
     runs-on: ubuntu-latest
@@ -129,7 +135,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Same version as ast-analyzer/Dockerfile's BUN_VERSION (I-9).
+          bun-version: 1.4.4
 
       - name: Install dependencies
         run: bun install
@@ -168,10 +175,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: pip-audit (backend, blocking)
+      - name: pip-audit (backend)
         run: |
           pip install pip-audit
-          pip-audit -r requirements.txt
+          python scripts/run_pip_audit.py requirements.txt
 
       - uses: actions/setup-node@v7
         with:
@@ -179,19 +186,17 @@ jobs:
           cache: "npm"
           cache-dependency-path: frontend/package-lock.json
 
-      - name: npm audit (frontend, informational)
+      - name: npm audit (frontend)
         working-directory: frontend
-        continue-on-error: true
         run: npm audit --audit-level=high
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.4.4
 
-      - name: bun audit (ast-analyzer, informational)
+      - name: bun audit (ast-analyzer)
         working-directory: ast-analyzer
-        continue-on-error: true
-        run: bun audit
+        run: bun audit --audit-level=high
 
   golden-eval:
     # Manual only — see the comment on the `workflow_dispatch` trigger

@@ -12,6 +12,11 @@ import pytest
 from app.graph.nodes.agent_3_critic import _verify_findings, agent_3_critic
 from app.graph.state import Finding, ReviewState
 from app.schemas.ast_payload import ASTAnalyzerPayload, DependencyEdge, SymbolRef
+from pathlib import Path
+
+# Since audit P1-10 the spec comes from the reviewed repo's payload; these
+# tests' repo ships Ignition's example spec (they used to get it implicitly).
+EXAMPLE_BOUNDARY_SPEC = (Path(__file__).resolve().parents[1] / "docs" / "examples" / "ignition.boundaries.yaml").read_text()
 
 
 def _ast_payload(symbols=None, dependency_graph=None, changed_files=None) -> ASTAnalyzerPayload:
@@ -21,6 +26,7 @@ def _ast_payload(symbols=None, dependency_graph=None, changed_files=None) -> AST
         changed_files=changed_files or [],
         symbols=symbols or [],
         dependency_graph=dependency_graph or [],
+        boundary_spec_yaml=EXAMPLE_BOUNDARY_SPEC,
     )
 
 
@@ -202,7 +208,7 @@ class TestAgentThreeCriticNode:
             "app.graph.nodes.agent_3_critic.LedgerRepository",
             lambda: MagicMock(
                 get_baseline=lambda repo: {"acs_score": baseline_acs} if baseline_acs is not None else None,
-                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+                get_consecutive_rejections=lambda pattern_key, repo_full_name: consecutive_rejections,
             ),
         )
         monkeypatch.setattr(
@@ -345,7 +351,7 @@ class TestAgentThreeCriticNode:
         record_incident = AsyncMock()
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.LedgerRepository",
-            lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key: 0),
+            lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key, repo_full_name: 0),
         )
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.VectorStore",
@@ -484,7 +490,7 @@ class TestHitlSeverityDemotion:
             "app.graph.nodes.agent_3_critic.LedgerRepository",
             lambda: MagicMock(
                 get_baseline=lambda repo: None,
-                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+                get_consecutive_rejections=lambda pattern_key, repo_full_name: consecutive_rejections,
             ),
         )
         monkeypatch.setattr("pathlib.Path.read_text", lambda self: "{verified_findings}")

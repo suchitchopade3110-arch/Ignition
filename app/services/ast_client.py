@@ -17,17 +17,23 @@ from app.schemas.ast_payload import ASTAnalyzerPayload
 
 class ASTClient:
     def __init__(self, base_url: str, timeout: float = 90.0):
+        # Render's private-network address comes as a bare "host:port"
+        # (render.yaml fromService hostport); add the scheme it lacks.
+        if "://" not in base_url:
+            base_url = f"http://{base_url}"
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
     async def analyze_git(
-        self, repo_full_name: str, pr_number: int, clone_url: str, ref: str, base_ref: str
+        self, repo_full_name: str, pr_number: int, clone_url: str, ref: str, base_ref: str,
+        auth_token: str | None = None,
     ) -> ASTAnalyzerPayload:
         return await self._post_analyze(
             repo_full_name,
             pr_number,
             {"type": "git", "url": clone_url, "ref": ref},
             base_sha=base_ref,
+            auth_token=auth_token,
         )
 
     async def analyze_zip(
@@ -38,17 +44,18 @@ class ASTClient:
         )
 
     async def _post_analyze(
-        self, repo_full_name: str, pr_number: int, source: dict, base_sha: str = ""
+        self, repo_full_name: str, pr_number: int, source: dict, base_sha: str = "",
+        auth_token: str | None = None,
     ) -> ASTAnalyzerPayload:
+        body = {
+            "repo_full_name": repo_full_name,
+            "pr_number": pr_number,
+            "source": source,
+            "base_sha": base_sha,
+        }
+        if auth_token:
+            body["auth_token"] = auth_token  # in the body, never the URL
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                f"{self._base_url}/analyze",
-                json={
-                    "repo_full_name": repo_full_name,
-                    "pr_number": pr_number,
-                    "source": source,
-                    "base_sha": base_sha,
-                },
-            )
+            response = await client.post(f"{self._base_url}/analyze", json=body)
             response.raise_for_status()
             return ASTAnalyzerPayload.model_validate(response.json())

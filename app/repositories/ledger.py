@@ -4,6 +4,8 @@ Historical architecture ledger + baseline risk scores.
 Split out of database.py so ledger reads/writes are mockable in tests
 without touching the vector store or a live Supabase connection.
 """
+import statistics
+
 from app.database import get_supabase
 
 
@@ -19,16 +21,38 @@ class LedgerRepository:
     def __init__(self):
         self._db = get_supabase()
 
+    BASELINE_WINDOW = 10
+
     def get_baseline(self, repo_full_name: str) -> dict | None:
+        """The median ACS of the repo's last 10 merge baselines (audit P0-7).
+        ACS is diff-scoped, so a single merged PR is too noisy to compare
+        against. None when the repo has no baseline yet."""
         result = (
             self._db.table(self.TABLE)
-            .select("*")
+            .select("acs_score")
             .eq("repo_full_name", repo_full_name)
             .order("created_at", desc=True)
-            .limit(1)
+            .limit(self.BASELINE_WINDOW)
             .execute()
         )
-        return result.data[0] if result.data else None
+        scores = [float(r["acs_score"]) for r in result.data or [] if r.get("acs_score") is not None]
+        if not scores:
+            return None
+        return {"acs_score": statistics.median(scores), "samples": len(scores)}
+
+    def has_baseline_for_pr(self, repo_full_name: str, pr_number: int) -> bool:
+        """Whether a merge baseline for this PR was already written; the
+        record_merge_baseline job checks it so a late redelivery can't
+        double-write."""
+        result = (
+            self._db.table(self.TABLE)
+            .select("risk_scores")
+            .eq("repo_full_name", repo_full_name)
+            .order("created_at", desc=True)
+            .limit(self.BASELINE_WINDOW)
+            .execute()
+        )
+        return any((r.get("risk_scores") or {}).get("pr") == pr_number for r in result.data or [])
 
     def write_baseline(self, repo_full_name: str, acs_score: float, risk_scores: dict) -> None:
         self._db.table(self.TABLE).insert(
@@ -56,7 +80,7 @@ class LedgerRepository:
             }
         ).execute()
 
-    def get_consecutive_rejections(self, pattern_key: str, limit: int = 20) -> int:
+    def get_consecutive_rejections(self, pattern_key: str, repo_full_name: str, limit: int = 20) -> int:
         """
         Counts "rejected" outcomes for this pattern, most-recent first,
         stopping at the first "approved" (or the `limit` cutoff). An
@@ -65,10 +89,14 @@ class LedgerRepository:
         counting total rejections ever — a pattern that was rejected 5
         times, approved once, then rejected once more is a streak of 1,
         not 6.
+
+        Scoped to one repo (audit P0-4): another tenant's rejections of the
+        same pattern must not demote this repo's findings.
         """
         result = (
             self._db.table(self.OUTCOMES_TABLE)
             .select("outcome")
+            .eq("repo_full_name", repo_full_name)
             .eq("pattern_key", pattern_key)
             .order("created_at", desc=True)
             .limit(limit)

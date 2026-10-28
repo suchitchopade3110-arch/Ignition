@@ -3,6 +3,8 @@
 You are reviewing a pull request for logic errors, unhandled edge cases,
 and performance issues (especially N+1 query patterns) only.
 
+{untrusted_notice}
+
 The actual code changes for this PR (unified diff format):
 {diff}
 

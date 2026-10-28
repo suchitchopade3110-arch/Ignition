@@ -9,7 +9,7 @@ call results don't vary by argument by default. FakeQuery below is a small
 in-memory stand-in that actually applies the recorded filters to a fixed
 row set, so each query in get_stats() gets the rows it would really match.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 from app.repositories.dashboard import ReviewRepository
@@ -69,7 +69,7 @@ class FakeDB:
 
 
 def _iso(days_ago: float) -> str:
-    return (datetime.utcnow() - timedelta(days=days_ago)).isoformat() + "Z"
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
 
 
 def _repo_with_rows(rows: list[dict]) -> ReviewRepository:

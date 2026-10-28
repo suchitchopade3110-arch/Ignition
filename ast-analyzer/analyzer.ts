@@ -11,14 +11,17 @@ import { Project, SyntaxKind, Node } from "ts-morph";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { prepareSource, type AnalyzeSource } from "./source";
+import { prepareSource, git, type AnalyzeSource } from "./source";
 
 interface AnalyzeArgs {
   repoFullName: string;
   prNumber: number;
   source: AnalyzeSource;
-  baseRef: string;  // NEW — needed to diff package.json against
-  projectCache: Map<string, Project>;
+  baseRef: string;
+  /** Short-lived GitHub installation token for private repos. Never logged. */
+  authToken?: string;
+  /** Kept for signature compatibility; no longer used (fresh Project per review). */
+  projectCache?: Map<string, Project>;
 }
 
 interface SymbolRef {
@@ -37,6 +40,8 @@ interface DependencyEdge {
 interface PackageRef {
   name: string;
   version: string;
+  /** The declared spec at the base commit; absent for a new dependency (P1-11). */
+  previous_version?: string;
 }
 
 export interface ASTAnalyzerPayload {
@@ -47,7 +52,17 @@ export interface ASTAnalyzerPayload {
   dependency_graph: DependencyEdge[];
   hard_rule_violations: string[];
   changed_packages: PackageRef[];  // NEW
+  /**
+   * ignition.boundaries.yaml from the PR's BASE commit (audit P1-10), so a
+   * PR can't loosen its own rules. null when the repo has none, or when it
+   * is over BOUNDARY_SPEC_MAX_BYTES. Mirrors ASTAnalyzerPayload in
+   * app/schemas/ast_payload.py.
+   */
+  boundary_spec_yaml: string | null;
 }
+
+export const BOUNDARY_SPEC_PATH = "ignition.boundaries.yaml";
+export const BOUNDARY_SPEC_MAX_BYTES = 64 * 1024;
 
 const GLOB_EXTENSIONS = ["ts", "tsx", "js", "jsx"];
 
@@ -70,12 +85,65 @@ function globsFor(sourceDir: string): string[] {
  * literals, comments, and pattern-definition arrays are structurally
  * invisible to this check, since they're never parsed as call expressions.
  */
-export function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[number], relPath: string): string[] {
-  const violations: string[] = [];
-  const callExpressions = file.getDescendantsOfKind(SyntaxKind.CallExpression);
+const CHILD_PROCESS_MODULES = new Set(["child_process", "node:child_process"]);
+const DANGEROUS_CP_FNS = new Set(["exec", "execSync"]);
 
-  for (const call of callExpressions) {
+/**
+ * Local names bound to the child_process module (namespace/default import,
+ * `const cp = require(...)`) and to its exec/execSync functions
+ * (`import { exec as run }`, `const { exec } = require(...)`). Resolving
+ * bindings instead of matching text closes the audit's P1-9 false negative
+ * (destructured require) without reintroducing substring false positives.
+ */
+function childProcessBindings(file: ReturnType<Project["getSourceFiles"]>[number]) {
+  const moduleNames = new Set<string>(["child_process"]);
+  const fnNames = new Set<string>();
+  for (const imp of file.getImportDeclarations()) {
+    if (!CHILD_PROCESS_MODULES.has(imp.getModuleSpecifierValue())) continue;
+    const ns = imp.getNamespaceImport();
+    if (ns) moduleNames.add(ns.getText());
+    const def = imp.getDefaultImport();
+    if (def) moduleNames.add(def.getText());
+    for (const n of imp.getNamedImports()) {
+      if (DANGEROUS_CP_FNS.has(n.getName())) fnNames.add(n.getAliasNode()?.getText() ?? n.getName());
+    }
+  }
+  for (const decl of file.getVariableDeclarations()) {
+    const init = decl.getInitializer();
+    if (!init || !Node.isCallExpression(init)) continue;
+    if (init.getExpression().getText() !== "require") continue;
+    const arg = init.getArguments()[0];
+    if (!arg || !Node.isStringLiteral(arg) || !CHILD_PROCESS_MODULES.has(arg.getLiteralValue())) continue;
+    const nameNode = decl.getNameNode();
+    if (Node.isIdentifier(nameNode)) moduleNames.add(nameNode.getText());
+    if (Node.isObjectBindingPattern(nameNode)) {
+      for (const el of nameNode.getElements()) {
+        const prop = el.getPropertyNameNode()?.getText() ?? el.getName();
+        if (DANGEROUS_CP_FNS.has(prop)) fnNames.add(el.getName());
+      }
+    }
+  }
+  return { moduleNames, fnNames };
+}
+
+function isRequireOfChildProcess(node: Node): boolean {
+  if (!Node.isCallExpression(node) || node.getExpression().getText() !== "require") return false;
+  const arg = node.getArguments()[0];
+  return !!arg && Node.isStringLiteral(arg) && CHILD_PROCESS_MODULES.has(arg.getLiteralValue());
+}
+
+export function detectHardRuleViolations(
+  file: ReturnType<Project["getSourceFiles"]>[number],
+  relPath: string,
+  addedLines?: Set<number>,
+): string[] {
+  const violations: string[] = [];
+  const { moduleNames, fnNames } = childProcessBindings(file);
+
+  for (const call of file.getDescendantsOfKind(SyntaxKind.CallExpression)) {
     const line = call.getStartLineNumber();
+    // P0-2: only lines this PR added can "introduce" a violation.
+    if (addedLines && !addedLines.has(line)) continue;
     const expr = call.getExpression();
 
     // Direct eval(...) call — matches only a bare identifier named "eval",
@@ -84,25 +152,20 @@ export function detectHardRuleViolations(file: ReturnType<Project["getSourceFile
       violations.push(`Direct eval() call found in ${relPath}:${line}`);
       continue;
     }
-
-    // child_process.exec(...) / cp.exec(...) — property access where the
-    // method name is "exec" and the object side plausibly refers to the
-    // child_process module (imported as child_process, cp, or via a
-    // require('child_process') call).
-    if (Node.isPropertyAccessExpression(expr) && expr.getName() === "exec") {
-      const objectText = expr.getExpression().getText();
-      const looksLikeChildProcess =
-        objectText === "child_process" ||
-        objectText === "cp" ||
-        objectText.includes("require('child_process')") ||
-        objectText.includes('require("child_process")');
-
-      if (looksLikeChildProcess) {
+    // exec(...) / run(...) where that name is bound to child_process's exec.
+    if (Node.isIdentifier(expr) && fnNames.has(expr.getText())) {
+      violations.push(`child_process.exec() call found in ${relPath}:${line}`);
+      continue;
+    }
+    // cp.exec(...) / require("child_process").execSync(...) where the
+    // object is bound to the child_process module.
+    if (Node.isPropertyAccessExpression(expr) && DANGEROUS_CP_FNS.has(expr.getName())) {
+      const obj = expr.getExpression();
+      if (moduleNames.has(obj.getText()) || isRequireOfChildProcess(obj)) {
         violations.push(`child_process.exec() call found in ${relPath}:${line}`);
       }
     }
   }
-
   return violations;
 }
 
@@ -175,20 +238,55 @@ interface ExtractedProjectData {
   hardRuleViolations: string[];
 }
 
+export interface ExtractScope {
+  /** Files this PR added/modified (repo-relative, posix). */
+  changed: Set<string>;
+  /** Added line numbers per changed file, from `git diff -U0`. */
+  addedLines: Map<string, Set<number>>;
+}
+
+function rel(sourceDir: string, abs: string): string {
+  return path.relative(sourceDir, abs).split(path.sep).join("/");
+}
+
 // Split out of analyzePullRequest so the symbol/dependency-graph/hard-rule
 // walk can be exercised directly against an in-memory ts-morph Project in
 // tests, without needing a real git clone or zip download through
 // prepareSource — see analyzer.test.ts.
-export function extractProjectData(project: Project, sourceDir: string): ExtractedProjectData {
+//
+// With a `scope` (every git-sourced review), output is limited to the diff
+// (audit P0-2): changed_files is exactly the PR's changed files, symbols
+// and edges cover changed files plus one hop, and hard rules apply only to
+// added lines. Without one (unit tests, zip sources) every file is in scope.
+export function extractProjectData(project: Project, sourceDir: string, scope?: ExtractScope): ExtractedProjectData {
   const sourceFiles = project.getSourceFiles();
   const changedFiles: string[] = [];
   const symbols: SymbolRef[] = [];
   const dependencyGraph: DependencyEdge[] = [];
   const hardRuleViolations: string[] = [];
 
+  // One hop of neighbours: files the changed files import, and files that
+  // import a changed file.
+  let inScope: Set<string> | null = null;
+  if (scope) {
+    inScope = new Set(scope.changed);
+    for (const file of sourceFiles) {
+      const from = rel(sourceDir, file.getFilePath());
+      for (const imp of file.getImportDeclarations()) {
+        const target = imp.getModuleSpecifierSourceFile();
+        if (!target) continue;
+        const to = rel(sourceDir, target.getFilePath());
+        if (scope.changed.has(from)) inScope.add(to);
+        if (scope.changed.has(to)) inScope.add(from);
+      }
+    }
+  }
+
   for (const file of sourceFiles) {
-    const relPath = path.relative(sourceDir, file.getFilePath());
-    changedFiles.push(relPath);
+    const relPath = rel(sourceDir, file.getFilePath());
+    if (inScope && !inScope.has(relPath)) continue;
+    const isChanged = !scope || scope.changed.has(relPath);
+    if (isChanged) changedFiles.push(relPath);
 
     for (const fn of file.getFunctions()) {
       symbols.push({
@@ -233,73 +331,229 @@ export function extractProjectData(project: Project, sourceDir: string): Extract
 
     for (const imp of file.getImportDeclarations()) {
       const resolved = imp.getModuleSpecifierSourceFile();
-      if (resolved) {
-        dependencyGraph.push({
-          from_file: relPath,
-          to_file: path.relative(sourceDir, resolved.getFilePath()),
-          imported_symbols: imp.getNamedImports().map((n) => n.getName()),
-        });
-      }
+      if (!resolved) continue;
+      const to = rel(sourceDir, resolved.getFilePath());
+      // Keep only edges that touch the diff (either end changed).
+      if (scope && !scope.changed.has(relPath) && !scope.changed.has(to)) continue;
+      dependencyGraph.push({
+        from_file: relPath,
+        to_file: to,
+        imported_symbols: imp.getNamedImports().map((n) => n.getName()),
+      });
     }
 
-    hardRuleViolations.push(...detectHardRuleViolations(file, relPath));
+    if (isChanged) {
+      hardRuleViolations.push(...detectHardRuleViolations(file, relPath, scope?.addedLines.get(relPath)));
+    }
   }
 
   return { changedFiles, symbols, dependencyGraph, hardRuleViolations };
 }
 
+const ANALYZABLE = /\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/;
+
+/** Changed files and their added line numbers, from the real git diff. */
+export async function diffScope(gitDir: string, baseSha: string, headSha: string, token?: string): Promise<ExtractScope> {
+  const names = await git(["diff", "--name-only", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  const changed = new Set(names.split("\n").map((s) => s.trim()).filter((s) => s && ANALYZABLE.test(s)));
+
+  const addedLines = new Map<string, Set<number>>();
+  const patch = await git(["diff", "-U0", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  let current: string | null = null;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      current = line.startsWith("+++ b/") ? line.slice(6) : null;
+      if (current && !addedLines.has(current)) addedLines.set(current, new Set());
+    } else if (current && line.startsWith("@@")) {
+      const m = /\+(\d+)(?:,(\d+))?/.exec(line);
+      if (!m) continue;
+      const startLine = Number(m[1]);
+      const count = m[2] === undefined ? 1 : Number(m[2]);
+      for (let i = 0; i < count; i++) addedLines.get(current)!.add(startLine + i);
+    }
+  }
+  return { changed, addedLines };
+}
+
+function buildProject(sourceDir: string): Project {
+  const tsConfigPath = path.join(sourceDir, "tsconfig.json");
+  const hasTsConfig = existsSync(tsConfigPath);
+  const project = new Project({
+    tsConfigFilePath: hasTsConfig ? tsConfigPath : undefined,
+    skipAddingFilesFromTsConfig: !hasTsConfig,
+  });
+  if (!hasTsConfig) project.addSourceFilesAtPaths(globsFor(sourceDir));
+  return project;
+}
+
 export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzerPayload> {
-  const repoKey = args.repoFullName;
-  const sourceDir = await prepareSource(repoKey, args.source);
-  const project = getOrCreateProject(repoKey, sourceDir, args.projectCache);
+  const headSha = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
+  const prepared = await prepareSource(args.repoFullName, args.source, {
+    headSha,
+    baseSha: args.baseRef,
+    prNumber: args.prNumber,
+    authToken: args.authToken,
+  });
 
-  const { changedFiles, symbols, dependencyGraph, hardRuleViolations } = extractProjectData(project, sourceDir);
+  try {
+    // Fresh Project per review, built from this review's own worktree:
+    // no stale ASTs (P0-3). The warm part that matters — git history — lives
+    // in the shared mirror, so this costs a parse, not a clone.
+    const project = buildProject(prepared.dir);
+    const scope = prepared.gitDir ? await diffScope(prepared.gitDir, args.baseRef, headSha, args.authToken) : undefined;
+    const { changedFiles, symbols, dependencyGraph, hardRuleViolations } = extractProjectData(
+      project,
+      prepared.dir,
+      scope,
+    );
 
-  // NEW — package diffing, independent of the AST symbol walk above
-  const headRef = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
-  const [basePackages, headPackages] = await Promise.all([
-    getPackageJsonAtRef(sourceDir, args.baseRef),
-    getPackageJsonAtRef(sourceDir, headRef),
-  ]);
-  const changedPackages = diffPackages(basePackages, headPackages);
+    const [packages, boundarySpecYaml] = prepared.gitDir
+      ? await Promise.all([
+          changedPackages(prepared.gitDir, args.baseRef, headSha, args.authToken),
+          getBoundarySpecAtRef(prepared.gitDir, args.baseRef, args.authToken),
+        ])
+      : [[], null];
 
-  return {
-    repo_full_name: args.repoFullName,
-    pr_number: args.prNumber,
-    changed_files: changedFiles,
-    symbols,
-    dependency_graph: dependencyGraph,
-    hard_rule_violations: hardRuleViolations,
-    changed_packages: changedPackages, // NEW
-  };
+    return {
+      repo_full_name: args.repoFullName,
+      pr_number: args.prNumber,
+      changed_files: changedFiles,
+      symbols,
+      dependency_graph: dependencyGraph,
+      hard_rule_violations: hardRuleViolations,
+      changed_packages: packages,
+      boundary_spec_yaml: boundarySpecYaml,
+    };
+  } finally {
+    await prepared.cleanup();
+  }
 }
 
 /**
- * Extracts a flat name->version map from package.json at a given git ref,
- * without checking out that ref (uses `git show` directly against the
- * already-cloned repo's history). Returns null if the ref/file doesn't
- * exist — a repo might not have a package.json, or the base ref might
- * predate one being added.
+ * The customer's boundary spec at `ref` (the PR's base commit), read from
+ * the mirror without checking anything out (audit P1-10). null when the
+ * file doesn't exist there or is over BOUNDARY_SPEC_MAX_BYTES (size checked
+ * before the content is read).
  */
-async function getPackageJsonAtRef(
-  sourceDir: string,
-  ref: string
-): Promise<Record<string, string> | null> {
+export async function getBoundarySpecAtRef(gitDir: string, ref: string, token?: string): Promise<string | null> {
+  const object = `${ref}:${BOUNDARY_SPEC_PATH}`;
+  let size: number;
   try {
-    const proc = Bun.spawn(["git", "show", `${ref}:package.json`], {
-      cwd: sourceDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const output = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) return null;
+    size = Number((await git(["cat-file", "-s", object], gitDir, token)).trim());
+  } catch {
+    return null; // no spec in this repo at the base commit
+  }
+  if (!Number.isFinite(size) || size > BOUNDARY_SPEC_MAX_BYTES) {
+    console.warn(`${BOUNDARY_SPEC_PATH} is ${size} bytes, over the ${BOUNDARY_SPEC_MAX_BYTES}-byte cap; ignored`);
+    return null;
+  }
+  return git(["show", object], gitDir, token);
+}
 
-    const pkg = JSON.parse(output);
+/** A file's content at `ref`, read from history without a checkout; null
+ * when it doesn't exist there (a new manifest has no base version). */
+async function fileAtRef(gitDir: string, ref: string, file: string, token?: string): Promise<string | null> {
+  try {
+    return await git(["show", `${ref}:${file}`], gitDir, token);
+  } catch {
+    return null;
+  }
+}
+
+/** dependencies + devDependencies of a package.json, or null if unreadable. */
+function manifestDependencies(text: string | null): Record<string, string> | null {
+  if (text === null) return null;
+  try {
+    const pkg = JSON.parse(text);
     return { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolved versions from a package-lock.json v2/v3 `packages` map (P2
+ * package diffing): name -> every version installed anywhere in the tree,
+ * so transitive and nested packages count. The root ("") and workspace
+ * entries aren't under node_modules/ and are skipped, as are links. A v1
+ * lockfile (no `packages`) or invalid JSON yields an empty map.
+ */
+export function lockfilePackages(text: string | null): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  if (text === null) return out;
+  let lock: any;
+  try {
+    lock = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  for (const [key, entry] of Object.entries<any>(lock?.packages ?? {})) {
+    const at = key.lastIndexOf("node_modules/");
+    if (at === -1 || !entry || entry.link || typeof entry.version !== "string") continue;
+    const name = key.slice(at + "node_modules/".length);
+    if (!out.has(name)) out.set(name, new Set());
+    out.get(name)!.add(entry.version);
+  }
+  return out;
+}
+
+/** Packages at a version the base lockfile didn't have. A package that had
+ * other versions at base is a bump (previous_version); one it didn't have
+ * at all is new. */
+export function diffLockfiles(
+  base: Map<string, Set<string>> | null,
+  head: Map<string, Set<string>>,
+): PackageRef[] {
+  const changed: PackageRef[] = [];
+  for (const [name, versions] of head) {
+    const before = base?.get(name);
+    for (const version of versions) {
+      if (before?.has(version)) continue;
+      const ref: PackageRef = { name, version };
+      if (before && before.size) ref.previous_version = [...before].sort().at(-1)!;
+      changed.push(ref);
+    }
+  }
+  return changed;
+}
+
+const MANIFEST = /(^|\/)package\.json$/;
+const LOCKFILE = /(^|\/)package-lock\.json$/;
+
+/**
+ * Every dependency the PR adds or changes (P2 package diffing): each
+ * changed package.json (any directory, for monorepos) by declared range,
+ * and each changed package-lock.json by resolved version, including
+ * transitive packages. Files under node_modules/ are ignored. When a
+ * lockfile covers a package, its resolved versions replace the
+ * package.json range for that name.
+ */
+export async function changedPackages(gitDir: string, baseSha: string, headSha: string, token?: string): Promise<PackageRef[]> {
+  const names = await git(["diff", "--name-only", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  const files = names.split("\n").map((s) => s.trim()).filter((s) => s && !s.split("/").includes("node_modules"));
+
+  const fromManifests: PackageRef[] = [];
+  const fromLockfiles: PackageRef[] = [];
+  await Promise.all(files.map(async (file) => {
+    if (MANIFEST.test(file)) {
+      const [base, head] = await Promise.all([fileAtRef(gitDir, baseSha, file, token), fileAtRef(gitDir, headSha, file, token)]);
+      fromManifests.push(...diffPackages(manifestDependencies(base), manifestDependencies(head)));
+    } else if (LOCKFILE.test(file)) {
+      const [base, head] = await Promise.all([fileAtRef(gitDir, baseSha, file, token), fileAtRef(gitDir, headSha, file, token)]);
+      fromLockfiles.push(...diffLockfiles(base === null ? null : lockfilePackages(base), lockfilePackages(head)));
+    }
+  }));
+
+  const resolved = new Set(fromLockfiles.map((p) => p.name));
+  const seen = new Set<string>();
+  const out: PackageRef[] = [];
+  for (const ref of [...fromLockfiles, ...fromManifests.filter((p) => !resolved.has(p.name))]) {
+    const key = `${ref.name}@${ref.version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
 }
 
 /**
@@ -313,17 +567,43 @@ async function getPackageJsonAtRef(
 export function diffPackages(
   base: Record<string, string> | null,
   head: Record<string, string> | null
-): { name: string; version: string }[] {
+): PackageRef[] {
   if (!head) return [];
-  const changed: { name: string; version: string }[] = [];
+  const changed: PackageRef[] = [];
 
   for (const [name, version] of Object.entries(head)) {
     const baseVersion = base?.[name];
     if (baseVersion !== version) {
-      // Strip leading ^ or ~ range specifiers for a cleaner version string
-      changed.push({ name, version: version.replace(/^[\^~]/, "") });
+      const v = normalizeVersion(version);
+      if (!v) continue;
+      const ref: PackageRef = v.alias ? { name: v.alias, version: v.version } : { name, version: v.version };
+      // A bump, not a new dependency (audit P1-11): Agent 2C only sends NEW
+      // packages to the model. Omitted entirely for a new package.
+      if (baseVersion !== undefined) ref.previous_version = baseVersion;
+      changed.push(ref);
     }
   }
 
   return changed;
+}
+
+/**
+ * Turns a declared range into a concrete version OSV/npm can look up, or
+ * null when there isn't one (workspace:, file:, link:, git URLs, tags).
+ * `npm:real-pkg@^1.2.3` aliases resolve to the real package name.
+ */
+export function normalizeVersion(spec: string): { version: string; alias?: string } | null {
+  let s = spec.trim();
+  let alias: string | undefined;
+  if (s.startsWith("npm:")) {
+    const at = s.lastIndexOf("@");
+    if (at <= 4) return null;
+    alias = s.slice(4, at);
+    s = s.slice(at + 1);
+  }
+  if (/^(workspace:|file:|link:|git|github:|https?:)/.test(s) || s.includes("/")) return null;
+  const m = /(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?(-[0-9A-Za-z.-]+)?/.exec(s);
+  if (!m) return null;
+  const part = (p?: string) => (p === undefined || p === "x" || p === "*" ? "0" : p);
+  return { version: `${m[1]}.${part(m[2])}.${part(m[3])}${m[4] ?? ""}`, alias };
 }

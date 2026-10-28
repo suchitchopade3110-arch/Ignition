@@ -15,6 +15,7 @@ from app.graph.state import ReviewState, Finding
 from app.rag.vector_store import VectorStore
 from app.services.llm_client import get_llm_client
 from app.services.finding_parser import parse_findings_json
+from app.services.prompt_safety import fence, new_nonce, untrusted_notice
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +40,21 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
         similar_incidents = []
 
     symbols_json = [symbol.model_dump() for symbol in state.ast_payload.symbols]
+    # Everything from the PR (and past model-written incidents) is fenced
+    # with a per-call nonce (audit P1-3).
+    nonce = new_nonce()
     prompt = prompt_template.format(
-        similar_incidents=json.dumps(similar_incidents),
-        symbols=symbols_json,
-        diff=state.diff_text,
+        untrusted_notice=untrusted_notice(nonce),
+        similar_incidents=fence("similar_incidents", json.dumps(similar_incidents), nonce),
+        symbols=fence("symbols", symbols_json, nonce),
+        diff=fence("diff", state.diff_text, nonce),
     )
 
     try:
         raw_response = await llm.complete(prompt, agent_name="agent_2b_chaos")
         findings = parse_findings_json(raw_response, agent_name="agent_2b_chaos")
     except Exception:
-        logger.exception("agent_2b_chaos LLM call failed; reporting no findings")
-        findings: list[Finding] = []
+        logger.exception("agent_2b_chaos LLM call failed; marking review incomplete")
+        return {"findings": [], "agent_errors": ["agent_2b_chaos"]}
 
     return {"findings": findings}

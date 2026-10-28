@@ -1,0 +1,3 @@
+# Vulnerabilities pip-audit may ignore in CI (I-12; scripts/run_pip_audit.py).
+# One per line: `<vuln id>  # <why it's safe to ignore, and when to recheck>`.
+# A line without a reason fails the audit. Prefer upgrading over adding here.

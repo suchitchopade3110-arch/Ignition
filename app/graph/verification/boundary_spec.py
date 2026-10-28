@@ -2,7 +2,8 @@
 Boundary-spec check — the Critic's other deterministic, no-LLM verification
 tool (alongside symbol_lookup.py's exact AST/symbol match).
 
-Loads `ignition.boundaries.yaml` (repo root) and checks a PR's real
+Parses the customer's `ignition.boundaries.yaml` (read by the analyzer from
+their repo at the PR's base commit, audit P1-10) and checks a PR's real
 dependency graph against it. This is what lets Agent 1's gate reject a
 layering inversion (e.g. a repository importing a route handler) as a hard
 rule violation, and what lets the Critic tag an Agent 2A finding
@@ -21,7 +22,16 @@ from pydantic import BaseModel
 
 from app.schemas.ast_payload import DependencyEdge
 
-DEFAULT_SPEC_PATH = Path(__file__).resolve().parent.parent.parent.parent / "ignition.boundaries.yaml"
+# Ignition's own spec, kept as the template customers copy (audit P1-10).
+# Reviews never use it: they use the spec from the reviewed repo.
+DEFAULT_SPEC_PATH = Path(__file__).resolve().parent.parent.parent.parent / "docs" / "examples" / "ignition.boundaries.yaml"
+
+MISSING_SPEC_NOTE = "No ignition.boundaries.yaml found; boundary checks skipped"
+INVALID_SPEC_NOTE = "ignition.boundaries.yaml could not be parsed; boundary checks skipped"
+
+
+class BoundarySpecError(ValueError):
+    """The spec file exists but isn't a valid spec."""
 
 
 class BoundaryLayer(BaseModel):
@@ -114,21 +124,49 @@ def check_boundary_violations(
     return violations
 
 
+def load_boundary_spec(yaml_text: str | None) -> BoundarySpec:
+    """
+    Parses a spec with yaml.safe_load (no tags, no code). None or an empty
+    document is an empty spec (no layers, no rules: nothing is flagged).
+    Anything that isn't a valid spec raises BoundarySpecError.
+    """
+    if yaml_text is None:
+        return BoundarySpec()
+    try:
+        raw = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        raise BoundarySpecError(f"not valid YAML: {exc}") from exc
+    if raw is None:
+        return BoundarySpec()
+    if not isinstance(raw, dict):
+        raise BoundarySpecError("the document must be a mapping with `layers` and `rules`")
+    try:
+        return BoundarySpec(
+            layers=[BoundaryLayer(**layer) for layer in raw.get("layers") or []],
+            rules=[
+                BoundaryRule(from_layer=rule["from"], to_layer=rule["to"], disallowed=rule.get("disallowed", True))
+                for rule in raw.get("rules") or []
+            ],
+        )
+    except (KeyError, TypeError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
+        raise BoundarySpecError(f"invalid layer or rule: {exc}") from exc
+
+
+def spec_from_payload(yaml_text: str | None) -> tuple[BoundarySpec, str | None]:
+    """The review's spec plus the one-line note the comment shows when there
+    isn't a usable one (audit P1-10)."""
+    if yaml_text is None:
+        return BoundarySpec(), MISSING_SPEC_NOTE
+    try:
+        return load_boundary_spec(yaml_text), None
+    except BoundarySpecError:
+        return BoundarySpec(), INVALID_SPEC_NOTE
+
+
 @lru_cache
 def load_default_boundary_spec() -> BoundarySpec:
-    """
-    Loads `ignition.boundaries.yaml` from the repo root. A missing file
-    yields an empty spec (no layers, no rules) rather than an error — a
-    deployment that hasn't configured boundaries yet shouldn't have every
-    PR gate call fail.
-    """
+    """Ignition's own spec (docs/examples/ignition.boundaries.yaml), the
+    template customers copy. Not used to review anything."""
     if not DEFAULT_SPEC_PATH.exists():
         return BoundarySpec()
-    raw = yaml.safe_load(DEFAULT_SPEC_PATH.read_text()) or {}
-    return BoundarySpec(
-        layers=[BoundaryLayer(**layer) for layer in raw.get("layers", [])],
-        rules=[
-            BoundaryRule(from_layer=rule["from"], to_layer=rule["to"], disallowed=rule.get("disallowed", True))
-            for rule in raw.get("rules", [])
-        ],
-    )
+    return load_boundary_spec(DEFAULT_SPEC_PATH.read_text())

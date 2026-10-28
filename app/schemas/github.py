@@ -9,6 +9,9 @@ from pydantic import BaseModel
 
 
 class Repository(BaseModel):
+    # GitHub's numeric repository id: the key for repo rows and settings (P2
+    # repo IDs). full_name is display only; owner_name forms can collide.
+    id: int
     full_name: str
     default_branch: str
     clone_url: str  # public HTTPS git URL — what the AST analyzer clones from
@@ -34,6 +37,10 @@ class PullRequestPayload(BaseModel):
     # it from. Optional so payloads that genuinely omit it (hand-crafted
     # test fixtures, mainly) don't fail validation.
     user: PullRequestUser | None = None
+    # Drafts are skipped until they're marked ready for review (audit P1-8).
+    draft: bool = False
+    # A "closed" event with merged=true writes a regression baseline (audit P0-7).
+    merged: bool = False
 
     @property
     def head_sha(self):
