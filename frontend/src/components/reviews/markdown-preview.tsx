@@ -1,59 +1,34 @@
+import ReactMarkdown, { type Components } from "react-markdown"
+
 interface MarkdownPreviewProps {
   content?: string
 }
 
+// Audit P1-4: this text is written by a model from a pull request's
+// content, so it is never injected as HTML. react-markdown builds React
+// elements (React escapes the text) and skips raw HTML; images are dropped
+// too, so a comment can't make the dashboard load a remote URL.
+const components: Components = {
+  h1: ({ children }) => <h3 className="text-base sm:text-lg font-semibold mt-4 mb-2 text-foreground break-words">{children}</h3>,
+  h2: ({ children }) => <h2 className="text-base sm:text-lg font-semibold mt-4 mb-2 text-foreground break-words">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-base sm:text-lg font-semibold mt-4 mb-2 text-foreground break-words">{children}</h3>,
+  h4: ({ children }) => <h4 className="text-sm sm:text-base font-semibold mt-3 mb-1.5 text-foreground break-words">{children}</h4>,
+  p: ({ children }) => <p className="mb-2 text-foreground/90 break-words leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="mb-2 space-y-1">{children}</ul>,
+  li: ({ children }) => <li className="ml-4 list-disc text-foreground/90 break-words">{children}</li>,
+  strong: ({ children }) => <strong className="text-foreground font-semibold">{children}</strong>,
+  blockquote: ({ children }) => <blockquote className="border-l-2 border-warning pl-3 my-2 text-foreground/90">{children}</blockquote>,
+  code: ({ children }) => <code className="rounded bg-secondary/40 px-1 py-0.5 font-mono text-xs">{children}</code>,
+  hr: () => <hr className="my-4 border-border" />,
+  a: ({ children, href }) => (
+    <a href={href} className="underline" target="_blank" rel="noopener noreferrer nofollow">
+      {children}
+    </a>
+  ),
+}
+
 export function MarkdownPreview({ content }: MarkdownPreviewProps) {
   if (!content) return null
-
-  const renderSimpleMarkdown = (text: string) => {
-    return text.split("\n").map((line, i) => {
-      if (line.startsWith("### ")) {
-        return (
-          <h3 key={i} className="text-base sm:text-lg font-semibold mt-4 mb-2 text-foreground break-words">
-            {line.substring(4)}
-          </h3>
-        )
-      }
-      if (line.startsWith("#### ")) {
-        return (
-          <h4 key={i} className="text-sm sm:text-base font-semibold mt-3 mb-1.5 text-foreground break-words">
-            {line.substring(5)}
-          </h4>
-        )
-      }
-      if (line.startsWith("⚠️ ")) {
-        const strongReplaced = line.replace(/\*\*(.*?)\*\*/g, '<strong class="text-warning">$1</strong>')
-        return (
-          <p
-            key={i}
-            className="mb-2 text-foreground/90 break-words leading-relaxed"
-            dangerouslySetInnerHTML={{ __html: strongReplaced }}
-          />
-        )
-      }
-      if (line.startsWith("* ")) {
-        const strongReplaced = line.substring(2).replace(/\*\*(.*?)\*\*/g, '<strong class="text-foreground">$1</strong>')
-        return (
-          <li
-            key={i}
-            className="ml-4 list-disc mb-1 text-foreground/90 break-words"
-            dangerouslySetInnerHTML={{ __html: strongReplaced }}
-          />
-        )
-      }
-      if (line.startsWith("---")) {
-        return <hr key={i} className="my-4 border-border" />
-      }
-      const italicReplaced = line.replace(/\*(.*?)\*/g, "<em>$1</em>")
-      return (
-        <p
-          key={i}
-          dangerouslySetInnerHTML={{ __html: italicReplaced }}
-          className="mb-1 text-foreground/90 break-words leading-relaxed"
-        />
-      )
-    })
-  }
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden shadow-xs w-full max-w-full min-w-0">
@@ -68,7 +43,11 @@ export function MarkdownPreview({ content }: MarkdownPreviewProps) {
         <span className="text-sm font-medium text-foreground">GitHub Comment Preview</span>
       </div>
       <div className="p-6 text-sm text-foreground bg-[#0d1117] overflow-x-auto max-w-full min-w-0">
-        <div className="max-w-none space-y-1">{renderSimpleMarkdown(content)}</div>
+        <div className="max-w-none space-y-1">
+          <ReactMarkdown skipHtml disallowedElements={["img"]} unwrapDisallowed components={components}>
+            {content}
+          </ReactMarkdown>
+        </div>
       </div>
     </div>
   )

@@ -146,7 +146,8 @@ class ReviewRepository:
             "agents": row.get("agents") or [],
             "findings": row.get("findings") or [],
             "diffs": row.get("diffs") or [],
-            "github_comment_preview": row.get("github_comment_preview")
+            "github_comment_preview": row.get("github_comment_preview"),
+            "final_comment_markdown": row.get("final_comment_markdown"),
         }
 
     def get_review(self, review_id: str) -> dict | None:

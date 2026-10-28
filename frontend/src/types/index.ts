@@ -103,7 +103,10 @@ export interface ReviewDetail extends Review {
   agents: AgentProgress[]
   findings: Finding[]
   diffs: ReviewDiff[]
+  /** URL of the posted GitHub comment, once posted. */
   githubCommentPreview?: string
+  /** The comment Ignition posts (or will post) on the PR. Untrusted text: render only via MarkdownPreview. */
+  finalCommentMarkdown?: string | null
 }
 
 export interface HitlItem extends ReviewDetail {

@@ -120,7 +120,12 @@ class ReviewDetail(Review):
     agents: list[AgentProgress] = []
     findings: list[Finding] = []
     diffs: list[ReviewDiff] = []
+    # URL of the posted comment, once posted.
     github_comment_preview: str | None = None
+    # What Ignition posts (or will post) on the PR, for the review page's
+    # preview panel — every review, not just approved ones (P2 "misleading
+    # output"; rendered with react-markdown, audit P1-4).
+    final_comment_markdown: str | None = None
 
 class HitlItem(ReviewDetail):
     waiting_since: str
