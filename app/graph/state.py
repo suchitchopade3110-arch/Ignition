@@ -169,6 +169,10 @@ class ReviewState(BaseModel):
     review_incomplete: bool = False
     # Set by finalize_and_post when the PR's head moved during the review.
     superseded_by: str | None = None
+    # Set by finalize_and_post (P2 partial success): False when the summary
+    # could not be posted after retries. Auto-fix only runs after a posted
+    # summary.
+    comment_posted: bool | None = None
 
     # Set by agent_4_autofix — informational, not used in routing decisions
     autofix_posted: int = 0

@@ -80,7 +80,9 @@ async def test_hitl_off_finalizes_a_critical_review(recorded):
     calls, severity = recorded
     severity["value"] = "critical"
     await _run(_state(enable_hitl=False))
-    assert "pause_for_human_approval" not in calls and calls[-1] == "finalize_and_post"
+    # Auto-fix is on by default and now runs after the summary (solutions
+    # doc, P2 partial success).
+    assert "pause_for_human_approval" not in calls and calls[-2:] == ["finalize_and_post", "agent_4_autofix"]
 
 
 @pytest.mark.asyncio
@@ -102,7 +104,8 @@ async def test_auto_fix_off_skips_agent_4(recorded):
 async def test_auto_fix_on_runs_agent_4(recorded):
     calls, _ = recorded
     await _run(_state(enable_auto_fix=True))
-    assert calls[-2:] == ["agent_4_autofix", "finalize_and_post"]
+    # Summary first, then suggestions (solutions doc, P2 partial success).
+    assert calls[-2:] == ["finalize_and_post", "agent_4_autofix"]
 
 
 # --- the job loads the settings and maps them onto the state --------------------

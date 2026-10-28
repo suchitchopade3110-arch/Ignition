@@ -6,6 +6,7 @@ in graph/routing.py. If you're tempted to add an `if` here, it probably
 belongs in routing.py instead.
 """
 import logging
+import time
 
 from langgraph.graph import StateGraph, END
 
@@ -45,6 +46,11 @@ def pause_for_human_approval(state: ReviewState) -> dict:
     return {}
 
 
+# Waits between attempts to post the summary (P2 partial success): three
+# attempts in all.
+SUMMARY_POST_RETRY_DELAYS = (1.0, 2.0)
+
+
 def finalize_and_post(state: ReviewState) -> dict:
     from app.services.github_client import GitHubClient
 
@@ -63,13 +69,32 @@ def finalize_and_post(state: ReviewState) -> dict:
     logger.info("Posting final review comment to GitHub", extra={
         "repo_full_name": state.repo_full_name, "pr_number": state.pr_number,
     })
-    gh.upsert_sticky_comment(
-        repo_full_name=state.repo_full_name,
-        pr_number=state.pr_number,
-        body=state.final_comment_markdown or "No findings.",
-        bot_login=gh.bot_login,
-    )
-    return {}
+    # Posted before any auto-fix suggestion (P2 partial success). A post
+    # that still fails after the retries doesn't fail the review: the
+    # pipeline records "comment not posted" and the check run carries the
+    # result.
+    for attempt, delay in enumerate((*SUMMARY_POST_RETRY_DELAYS, None), start=1):
+        try:
+            gh.upsert_sticky_comment(
+                repo_full_name=state.repo_full_name,
+                pr_number=state.pr_number,
+                body=state.final_comment_markdown or "No findings.",
+                bot_login=gh.bot_login,
+            )
+            return {"comment_posted": True}
+        except Exception:
+            logger.warning("Posting the review comment failed (attempt %d)", attempt, exc_info=True)
+            if delay is None:
+                return {"comment_posted": False}
+            time.sleep(delay)
+    return {"comment_posted": False}  # unreachable; keeps type checkers happy
+
+
+def route_after_finalize(state: ReviewState) -> str:
+    """Suggestions follow a posted summary, never stand alone (P2)."""
+    if state.superseded_by or state.comment_posted is False or not state.enable_auto_fix:
+        return END
+    return "agent_4_autofix"
 
 
 def route_after_gate_combined(state: ReviewState) -> list[str]:
@@ -147,14 +172,17 @@ def build_graph():
             # question, so re-running them on every retry was pure waste.
             "retry_structural_recheck": "agent_2a_struct",
             "pause_for_human_approval": "pause_for_human_approval",
-            "finalize_and_post": "agent_4_autofix",
+            # Summary first, suggestions after (P2 partial success):
+            # finalize_and_post routes on to agent_4_autofix itself.
+            "finalize_and_post": "finalize_and_post",
             "finalize_without_autofix": "finalize_and_post",
         },
     )
 
-    graph.add_edge("agent_4_autofix", "finalize_and_post")
+    graph.add_conditional_edges("finalize_and_post", route_after_finalize,
+                                {"agent_4_autofix": "agent_4_autofix", END: END})
+    graph.add_edge("agent_4_autofix", END)
     graph.add_edge("direct_rejection", END)
     graph.add_edge("pause_for_human_approval", END)  # resumed externally on human approval
-    graph.add_edge("finalize_and_post", END)
 
     return graph.compile()

@@ -726,10 +726,21 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             await _cancel_as_superseded(review_id, superseded_by, check)
                             _record_terminal_metric("cancelled")
                             continue
-                        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "completed"})
+                        # The review itself succeeded even if its PR comment
+                        # didn't post (P2 partial success); the check run
+                        # then carries the result.
+                        posted = (node_output or {}).get("comment_posted") is not False
+                        update = {"status": "completed"}
+                        if not posted:
+                            update["status_reason"] = "comment not posted"
+                        await asyncio.to_thread(review_repo.update_review, review_id, update)
                         conclusion, title = check_runs.posted_outcome(outcome["findings"], outcome["incomplete"])
                         db_comment = (await asyncio.to_thread(review_repo.get_review, review_id) or {}).get("final_comment_markdown")
-                        await check.conclude(conclusion, title, summary=db_comment or title)
+                        summary = db_comment or title
+                        if not posted:
+                            summary = ("The review comment could not be posted to this PR; "
+                                       "the review is below.\n\n" + summary)
+                        await check.conclude(conclusion, title, summary=summary)
 
                         # Update Repository baseline stats
                         db_rev = await asyncio.to_thread(review_repo.get_review, review_id)
