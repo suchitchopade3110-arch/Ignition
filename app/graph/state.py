@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import Annotated, Literal
 import operator
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from app.graph.verification.boundary_spec import BoundarySpec, spec_from_payload
 from app.schemas.ast_payload import ASTAnalyzerPayload
 from app.schemas.github import PullRequestWebhook
 
@@ -116,6 +117,19 @@ class ReviewState(BaseModel):
     )
     enable_hitl: bool = True
     enable_auto_fix: bool = True
+
+    # The reviewed repo's own boundary spec (audit P1-10), parsed once from
+    # ast_payload.boundary_spec_yaml (the file at the PR's base commit).
+    # agent_1_gate and the Critic read it from here. No usable file: an
+    # empty spec plus a note for the comment.
+    boundary_spec: BoundarySpec | None = None
+    boundary_spec_note: str | None = None
+
+    @model_validator(mode="after")
+    def _parse_boundary_spec(self) -> "ReviewState":
+        if self.boundary_spec is None:
+            self.boundary_spec, self.boundary_spec_note = spec_from_payload(self.ast_payload.boundary_spec_yaml)
+        return self
 
     # Written once by Agent 1
     hard_rule_violation: bool = False

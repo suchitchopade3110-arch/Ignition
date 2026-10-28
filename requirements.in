@@ -46,3 +46,7 @@ multidict>=6.9.1,<7
 # Encrypts users' GitHub tokens at rest (audit P1-1, MultiFernet). Already
 # installed through pyjwt[crypto]; listed because app code imports it.
 cryptography>=46
+# Parses the reviewed repo's ignition.boundaries.yaml (audit P1-10,
+# yaml.safe_load). Already installed transitively; listed because app code
+# imports it.
+pyyaml>=6.0

@@ -30,15 +30,14 @@ Deliberately varied rather than exhaustive:
 
 Two notes on realism trade-offs, both deliberate:
 
-1. `ignition.boundaries.yaml`'s layer globs (`app/repositories/**`,
-   `app/main.py`, etc.) are THIS repo's own paths — boundary_spec.py
-   always loads Ignition's own spec file regardless of which repo a PR
-   targets (see load_default_boundary_spec's docstring), so the two
-   fixtures that need to exercise real boundary-rule matching
-   (fact_checked_*, hard_gate_rejects_direct_boundary_violation_edge) use
-   Ignition-style `app/` paths rather than the generic `acme/widgets`
-   paths the other fixtures use. Everything else in this file is a
-   generic hypothetical target repo, same as the original two fixtures.
+1. Since audit P1-10 the boundary spec comes from the reviewed repo
+   (ASTAnalyzerPayload.boundary_spec_yaml, read at the base commit). The
+   three fixtures that exercise boundary-rule matching (fact_checked_*,
+   hard_gate_rejects_direct_boundary_violation_edge and
+   injection_comment_cannot_lower_proven_severities) carry
+   docs/examples/ignition.boundaries.yaml as their repo's spec, which is
+   why they use Ignition-style `app/` paths. Every other fixture is a
+   generic hypothetical target repo with no spec file.
 
 2. Security fixtures make REAL network calls when actually run (OSV.dev
    for Phase 1, the live npm registry for Phase 1.5) — see
@@ -49,9 +48,13 @@ Two notes on realism trade-offs, both deliberate:
    npm packages precisely so their OSV/naming signal won't drift.
 """
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.schemas.ast_payload import ASTAnalyzerPayload, DependencyEdge, PackageRef, SymbolRef
 from tests.eval.metrics import ExpectedFinding
+
+# The spec the boundary fixtures' "repo" ships (audit P1-10).
+EXAMPLE_BOUNDARY_SPEC = (Path(__file__).resolve().parents[2] / "docs" / "examples" / "ignition.boundaries.yaml").read_text()
 
 
 @dataclass(frozen=True)
@@ -159,6 +162,7 @@ GOLDEN_PRS: list[GoldenPR] = [
             ],
             hard_rule_violations=[],
             changed_packages=[],
+            boundary_spec_yaml=EXAMPLE_BOUNDARY_SPEC,
         ),
         expected_findings=[
             ExpectedFinding(
@@ -737,6 +741,7 @@ GOLDEN_PRS: list[GoldenPR] = [
             ],
             hard_rule_violations=[],
             changed_packages=[],
+            boundary_spec_yaml=EXAMPLE_BOUNDARY_SPEC,
         ),
         expected_findings=[],
     ),
@@ -864,6 +869,7 @@ GOLDEN_PRS: list[GoldenPR] = [
             ],
             hard_rule_violations=[],
             changed_packages=[PackageRef(name="lodash", version="4.17.4")],
+            boundary_spec_yaml=EXAMPLE_BOUNDARY_SPEC,
         ),
         expected_findings=[
             ExpectedFinding(

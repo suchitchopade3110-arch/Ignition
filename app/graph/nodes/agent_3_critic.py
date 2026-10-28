@@ -29,7 +29,7 @@ from app.graph.verification.symbol_lookup import (
     SymbolLookupError,
     DependencyEdgeLookupError,
 )
-from app.graph.verification.boundary_spec import BoundarySpec, find_layer, is_boundary_violation, load_default_boundary_spec
+from app.graph.verification.boundary_spec import BoundarySpec, find_layer, is_boundary_violation
 from app.graph.scoring import compute_acs, diff_scoped_dependency_count, is_rule_regression
 from app.repositories.ledger import LedgerRepository
 from app.rag.vector_store import VectorStore
@@ -90,7 +90,7 @@ def _verify_findings(state: ReviewState) -> tuple[list[Finding], list[Finding]]:
     used by the caller to decide whether to retry and, if so, to build the
     rejected-claims list Agent 2A's re-prompt reads).
     """
-    boundary_spec = load_default_boundary_spec()
+    boundary_spec = state.boundary_spec  # the reviewed repo's own spec (audit P1-10)
     verified: list[Finding] = []
     hallucinated: list[Finding] = []
 
@@ -356,7 +356,8 @@ async def agent_3_critic(state: ReviewState) -> dict:
         "critic_wants_retry": should_retry,
         "hallucination_retry_count": 1 if should_retry else 0,
         "final_comment_markdown": _render_markdown(
-            verified_findings, acs_score, regression, narrative, failed_agents=failed_agents
+            verified_findings, acs_score, regression, narrative, failed_agents=failed_agents,
+            boundary_note=state.boundary_spec_note,
         ),
         "review_incomplete": incomplete,
     }
@@ -390,10 +391,14 @@ def _render_markdown(
     regression: bool,
     narrative: str | None,
     failed_agents: list[str] | None = None,
+    boundary_note: str | None = None,
 ) -> str:
     failed_agents = failed_agents or []
     acs = "n/a" if acs_score is None else f"{acs_score:.1f}"
     lines = [f"## Ignition Review — ACS: {acs}"]
+    if boundary_note:
+        # Why nothing is fact_checked when the repo has no usable spec (P1-10).
+        lines.append(f"_{boundary_note}._")
     if failed_agents:
         lines.append(
             "> **Review incomplete.** These checks did not run: "

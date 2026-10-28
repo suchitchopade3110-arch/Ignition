@@ -50,7 +50,17 @@ export interface ASTAnalyzerPayload {
   dependency_graph: DependencyEdge[];
   hard_rule_violations: string[];
   changed_packages: PackageRef[];  // NEW
+  /**
+   * ignition.boundaries.yaml from the PR's BASE commit (audit P1-10), so a
+   * PR can't loosen its own rules. null when the repo has none, or when it
+   * is over BOUNDARY_SPEC_MAX_BYTES. Mirrors ASTAnalyzerPayload in
+   * app/schemas/ast_payload.py.
+   */
+  boundary_spec_yaml: string | null;
 }
+
+export const BOUNDARY_SPEC_PATH = "ignition.boundaries.yaml";
+export const BOUNDARY_SPEC_MAX_BYTES = 64 * 1024;
 
 const GLOB_EXTENSIONS = ["ts", "tsx", "js", "jsx"];
 
@@ -395,12 +405,13 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
       scope,
     );
 
-    const [basePackages, headPackages] = prepared.gitDir
+    const [basePackages, headPackages, boundarySpecYaml] = prepared.gitDir
       ? await Promise.all([
           getPackageJsonAtRef(prepared.gitDir, args.baseRef, args.authToken),
           getPackageJsonAtRef(prepared.gitDir, headSha, args.authToken),
+          getBoundarySpecAtRef(prepared.gitDir, args.baseRef, args.authToken),
         ])
-      : [null, null];
+      : [null, null, null];
 
     return {
       repo_full_name: args.repoFullName,
@@ -410,10 +421,32 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
       dependency_graph: dependencyGraph,
       hard_rule_violations: hardRuleViolations,
       changed_packages: diffPackages(basePackages, headPackages),
+      boundary_spec_yaml: boundarySpecYaml,
     };
   } finally {
     await prepared.cleanup();
   }
+}
+
+/**
+ * The customer's boundary spec at `ref` (the PR's base commit), read from
+ * the mirror without checking anything out (audit P1-10). null when the
+ * file doesn't exist there or is over BOUNDARY_SPEC_MAX_BYTES (size checked
+ * before the content is read).
+ */
+export async function getBoundarySpecAtRef(gitDir: string, ref: string, token?: string): Promise<string | null> {
+  const object = `${ref}:${BOUNDARY_SPEC_PATH}`;
+  let size: number;
+  try {
+    size = Number((await git(["cat-file", "-s", object], gitDir, token)).trim());
+  } catch {
+    return null; // no spec in this repo at the base commit
+  }
+  if (!Number.isFinite(size) || size > BOUNDARY_SPEC_MAX_BYTES) {
+    console.warn(`${BOUNDARY_SPEC_PATH} is ${size} bytes, over the ${BOUNDARY_SPEC_MAX_BYTES}-byte cap; ignored`);
+    return null;
+  }
+  return git(["show", object], gitDir, token);
 }
 
 /**

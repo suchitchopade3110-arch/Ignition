@@ -15,7 +15,7 @@ into state.diff_text, and re-fetching could overwrite it with "" on a
 GitHub hiccup, silently blinding every semantic agent (audit P2).
 """
 from app.graph.state import ReviewState
-from app.graph.verification.boundary_spec import check_boundary_violations, load_default_boundary_spec
+from app.graph.verification.boundary_spec import check_boundary_violations
 
 
 def agent_1_gate(state: ReviewState) -> dict:
@@ -34,7 +34,7 @@ def agent_1_gate(state: ReviewState) -> dict:
     # would hard-reject every unrelated PR that happens to share an AST
     # payload with it, forever, which isn't "this PR introduced a hard
     # violation" — the only claim the gate is meant to make.
-    boundary_spec = load_default_boundary_spec()
+    boundary_spec = state.boundary_spec  # the reviewed repo's own spec (audit P1-10)
     changed_files = set(state.ast_payload.changed_files)
     diff_scoped_edges = [
         edge for edge in state.ast_payload.dependency_graph if edge.from_file in changed_files

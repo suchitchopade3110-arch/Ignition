@@ -3,6 +3,11 @@ from unittest.mock import MagicMock
 from app.graph.nodes.agent_1_gate import agent_1_gate
 from app.graph.state import ReviewState
 from app.schemas.ast_payload import ASTAnalyzerPayload, DependencyEdge
+from pathlib import Path
+
+# Since audit P1-10 the spec comes from the reviewed repo's payload; these
+# tests' repo ships Ignition's example spec (they used to get it implicitly).
+EXAMPLE_BOUNDARY_SPEC = (Path(__file__).resolve().parents[1] / "docs" / "examples" / "ignition.boundaries.yaml").read_text()
 
 
 def _make_state(
@@ -21,6 +26,7 @@ def _make_state(
             symbols=[],
             dependency_graph=dependency_graph or [],
             hard_rule_violations=hard_rule_violations,
+            boundary_spec_yaml=EXAMPLE_BOUNDARY_SPEC,
         ),
     )
 

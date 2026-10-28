@@ -35,3 +35,7 @@ class ASTAnalyzerPayload(BaseModel):
     dependency_graph: list[DependencyEdge]
     hard_rule_violations: list[str] = []  # e.g. banned imports, blatant layer crossings
     changed_packages: list[PackageRef] = []  # NEW
+    # The customer's ignition.boundaries.yaml at the PR's base commit (audit
+    # P1-10), or None when the repo has none (or it's over 64 KB). Mirrors
+    # ASTAnalyzerPayload.boundary_spec_yaml in ast-analyzer/analyzer.ts.
+    boundary_spec_yaml: str | None = None
