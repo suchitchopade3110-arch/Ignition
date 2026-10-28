@@ -13,6 +13,7 @@ import json
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -61,11 +62,21 @@ from app.services.stream_manager import stream_manager
 from app.services.logging_config import configure_logging, set_correlation_id
 from app.services.health_checks import run_health_checks
 from app.services.llm_client import get_llm_client
+from app.services.schema_check import require_tables_or_exit
 
 configure_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Ignition")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # A deploy that skipped a migration fails here, at startup, instead of
+    # failing reviews later (audit P0-9). The Supabase client is sync.
+    await asyncio.to_thread(require_tables_or_exit)
+    yield
+
+
+app = FastAPI(title="Ignition", lifespan=lifespan)
 
 settings = get_settings()
 settings.validate_production_safety(logger)

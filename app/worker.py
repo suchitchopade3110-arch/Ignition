@@ -40,6 +40,7 @@ from app.services.review_pipeline import run_review_job
 from app.services.reconciliation import reconcile_orphaned_reviews
 from app.services.logging_config import configure_logging
 from app.services.llm_client import get_llm_client
+from app.services.schema_check import require_tables_or_exit
 
 # Arq's own CLI doesn't call logging.basicConfig for us (unlike
 # app/main.py, which does) — without this, reconciliation's INFO-level
@@ -61,6 +62,9 @@ async def on_startup(ctx: dict) -> None:
     # at startup instead of on whichever job/agent happens to call it
     # first.
     get_llm_client()
+    # Refuse to start on a database missing a migration (audit P0-9), before
+    # reconciliation or any job touches it.
+    require_tables_or_exit()
     await reconcile_orphaned_reviews()
 
 

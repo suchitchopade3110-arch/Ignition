@@ -29,7 +29,9 @@ webhooks, and reviews will all fail. Have these ready:
   running it, confirm `SUPABASE_SERVICE_KEY` is the `service_role` key, or
   the backend loses access too. This prints only the key's role claim:
   `python3 -c 'import os,base64,json; p=os.environ["SUPABASE_SERVICE_KEY"].split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4)))["role"])'`
-  — it must print `service_role`.
+  — it must print `service_role`. Both the web service and the worker
+  refuse to start while a required table is missing: their logs name it
+  ("Required Supabase tables are missing or unreadable: ...").
 - **An LLM API key** — Groq by default (`LLM_PROVIDER=groq`, free tier
   available), or whatever `app/services/llm_client.py` supports.
 
