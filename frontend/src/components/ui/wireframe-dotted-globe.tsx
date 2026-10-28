@@ -321,10 +321,11 @@ export default function RotatingEarth({ width = 800, height = 600, className }: 
     const loadWorldData = async () => {
       try {
         setIsLoading(true)
-        const response = await fetch(
-          "https://raw.githubusercontent.com/martynafford/natural-earth-geojson/refs/heads/master/110m/physical/ne_110m_land.json",
-          { signal: controller.signal }
-        )
+        // Natural Earth 1:110m land polygons (public domain), served from this
+        // app so the CSP's connect-src 'self' holds (P2 security headers).
+        // Source: github.com/martynafford/natural-earth-geojson,
+        // 110m/physical/ne_110m_land.json.
+        const response = await fetch("/data/ne_110m_land.json", { signal: controller.signal })
         if (!response.ok) throw new Error("Failed to load land data")
 
         landFeatures = (await response.json()) as LandFeatureCollection

@@ -18,7 +18,40 @@ function backendUrl(): string {
   return "http://localhost:8000";
 }
 
+/**
+ * Security headers (solutions doc, P2). connect-src 'self' works because
+ * the API is same-origin (P0-5). 'unsafe-inline' for scripts is what Next.js
+ * needs without nonces (a nonce middleware is deferred). The proxied
+ * FastAPI docs (/docs, /redoc) load Swagger UI and ReDoc from a CDN, so the
+ * CSP skips them; they still get the other three headers.
+ */
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "img-src 'self' data: https://avatars.githubusercontent.com",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self' https://github.com",
+].join("; ");
+
+const SECURITY_HEADERS = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+];
+
 const nextConfig: NextConfig = {
+  async headers() {
+    return [
+      { source: "/(.*)", headers: SECURITY_HEADERS },
+      {
+        source: "/((?!(?:docs|redoc)(?:/|$)).*)",
+        headers: [{ key: "Content-Security-Policy", value: CONTENT_SECURITY_POLICY }],
+      },
+    ];
+  },
   turbopack: {
     root: path.resolve(__dirname),
   },
