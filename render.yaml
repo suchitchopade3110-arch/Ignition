@@ -49,7 +49,8 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    # Trust X-Forwarded-For from Render's proxy, the only way in (I-6).
+    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*
     plan: 0.5c-512mb
     # Dependency-free liveness (I-5); the deep check is /readyz.
     healthCheckPath: /livez
