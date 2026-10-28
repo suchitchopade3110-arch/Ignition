@@ -22,8 +22,9 @@ webhooks, and reviews will all fail. Have these ready:
 - **A Supabase project** (URL + service key) — Postgres + pgvector. Run the
   `migrations*.sql` files at the repo root against it, in order
   (`migrations.sql` first, then `migrations_002_...` through
-  `migrations_011_...`) — Supabase's SQL Editor works fine for this, or
-  `psql` if you'd rather.
+  `migrations_012_...`) — Supabase's SQL Editor works fine for this, or
+  `psql` if you'd rather. **Skipping 012 makes every review that has a
+  finding fail** (the Critic reads `hitl_finding_outcomes`).
 - **An LLM API key** — Groq by default (`LLM_PROVIDER=groq`, free tier
   available), or whatever `app/services/llm_client.py` supports.
 
@@ -52,7 +53,7 @@ set:
 | `GITHUB_PRIVATE_KEY` | the full contents of the `.pem` you downloaded, including `-----BEGIN/END-----` lines |
 | `GITHUB_WEBHOOK_SECRET` | whatever you set as the App's webhook secret |
 | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | from the OAuth App (or the GitHub App's OAuth section) |
-| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL_NAME` | e.g. `groq` / your Groq key / `qwen/qwen3-32b` |
+| `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL_NAME` | e.g. `groq` / your Groq key / `openai/gpt-oss-120b` (plus `LLM_REASONING_EFFORT=low`) |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | from your Supabase project settings |
 
 Save changes — this triggers a redeploy of `ignition-backend`.
