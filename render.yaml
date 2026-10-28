@@ -145,6 +145,9 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      # Reviews at a time on this 1c-2g worker (I-7).
+      - key: WORKER_MAX_JOBS
+        value: "2"
       - key: REDIS_URL
         fromService:
           type: keyvalue

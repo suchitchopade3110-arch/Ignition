@@ -31,6 +31,7 @@ production (the Dockerfile) runs Linux.
 """
 import asyncio
 import logging
+import os
 
 from arq.connections import RedisSettings
 from arq import cron
@@ -106,3 +107,10 @@ class WorkerSettings:
     # them. 50 s (I-3) fits inside render.yaml's maxShutdownDelaySeconds: 60
     # for ignition-worker, so Render doesn't SIGKILL mid-drain.
     job_completion_wait = 50
+
+    # Budgets (I-7). Two reviews at a time per 1c-2g worker (Arq's default
+    # is 10); a job's whole run is capped at 220 s inside run_review_job
+    # (review_pipeline.JOB_BUDGET_SECONDS), so Arq's own 240 s limit (its
+    # default is 300) only ever catches something that ignores that budget.
+    max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))
+    job_timeout = 240

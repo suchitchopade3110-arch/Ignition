@@ -39,6 +39,12 @@ graph = build_graph()
 review_repo = ReviewRepository()
 repo_repo = RepoRepository()
 
+# The whole job — PR fetch, clone and analysis, graph — runs inside this
+# budget (I-7), below Arq's job_timeout (240 s, app/worker.py), so a slow
+# review ends as a recorded timeout instead of being killed by Arq. The
+# graph alone still has review_latency_budget_seconds inside it.
+JOB_BUDGET_SECONDS = 220
+
 # Per-job heartbeat (I-4): reconciliation treats a running review with no
 # fresh key as orphaned, so a new worker never fails the old one's jobs.
 HEARTBEAT_INTERVAL_SECONDS = 10
@@ -180,8 +186,17 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     exit_reason = "unexpected exit"
     redis = ctx.get("redis")  # Arq's connection; absent when called directly
     heartbeat = asyncio.create_task(_heartbeat(redis, review_id)) if redis is not None else None
+    budget = asyncio.timeout(JOB_BUDGET_SECONDS)
     try:
-        await _review_job_body(event, review_id, check)
+        async with budget:
+            await _review_job_body(event, review_id, check, budget)
+    except TimeoutError:
+        # The whole-job budget ran out (I-7). The body records it when the
+        # cut lands inside its main try; otherwise (e.g. a hung PR fetch)
+        # it is recorded here. Either way the job ends normally for Arq.
+        if not check.concluded:
+            metrics.reviews_completed_total.labels(status="timed_out").inc()
+            await _record_job_timeout(review_id, check)
     except BaseException as exc:
         exit_reason = f"failed: {type(exc).__name__}"
         raise
@@ -202,7 +217,20 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                 logger.warning("Could not clear the heartbeat for %s", review_id, exc_info=True)
 
 
-async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _CheckRun) -> None:
+def _job_timeout_reason() -> str:
+    return f"timed out — exceeded the job budget ({JOB_BUDGET_SECONDS}s)"
+
+
+async def _record_job_timeout(review_id: str, check: _CheckRun) -> None:
+    status_reason = _job_timeout_reason()
+    logger.warning("Review %s %s", review_id, status_reason)
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
+    await stream_manager.publish(review_id, {"type": "review.failed", "reviewId": review_id, "status": "failed"})
+    await check.could_not_finish(status_reason)
+
+
+async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _CheckRun,
+                           budget: "asyncio.Timeout | None" = None) -> None:
     logger.info("Starting background review", extra={"review_id": review_id})
     _job_start_time = time.monotonic()
 
@@ -741,6 +769,12 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
             return
 
     except asyncio.CancelledError:
+        if budget is not None and budget.expired():
+            # Not a shutdown: the whole-job budget (I-7) cancelled us.
+            # asyncio.timeout turns this into TimeoutError on the way out.
+            _record_terminal_metric("timed_out")
+            await _record_job_timeout(review_id, check)
+            raise
         # Arq cancels this task when a SIGTERM's graceful-drain window
         # (WorkerSettings.job_completion_wait, app/worker.py) expires
         # before the job finished. This is the precise counterpart to
