@@ -734,6 +734,11 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
         yield ": connected\n\n"
         try:
             async for event in stream_manager.stream(review_id):
+                if event is None:
+                    # Nothing for a while (I-8): an SSE comment keeps
+                    # proxies from cutting the stream; EventSource ignores it.
+                    yield ": keepalive\n\n"
+                    continue
                 payload = SseEventPayload(**event)
                 event_type = event.get("type", "message")
                 yield f"event: {event_type}\ndata: {payload.model_dump_json(by_alias=True)}\n\n"

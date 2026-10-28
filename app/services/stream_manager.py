@@ -20,6 +20,7 @@ directly by the SSE endpoint in app/main.py.
 """
 import json
 import logging
+import time
 
 from app.services.redis_client import get_pubsub_redis
 
@@ -31,6 +32,12 @@ logger = logging.getLogger(__name__)
 # plain Python list per review_id. TTL bounds it to a review's realistic
 # lifetime so it doesn't accumulate forever.
 _HISTORY_TTL_SECONDS = 60 * 60 * 6  # 6 hours
+
+# I-8: an idle stream yields a keepalive this often, so a proxy never cuts
+# a quiet stream and a client notices a dead one; a stream ends after
+# MAX_STREAM_SECONDS (EventSource reconnects and replays history).
+KEEPALIVE_SECONDS = 15
+MAX_STREAM_SECONDS = 10 * 60
 
 
 def _channel(review_id: str) -> str:
@@ -54,11 +61,16 @@ class ReviewStreamManager:
         await r.expire(_history_key(review_id), _HISTORY_TTL_SECONDS)
         await r.publish(_channel(review_id), payload)
 
-    async def stream(self, review_id: str):
+    async def stream(self, review_id: str, keepalive_seconds: float = KEEPALIVE_SECONDS,
+                     max_seconds: float = MAX_STREAM_SECONDS):
         """
         Async generator yielding raw event dicts for a review: history
         first (for late/reconnecting subscribers), then live events as
-        they're published. Note: as with the original in-memory
+        they're published — and None whenever keepalive_seconds pass with
+        no event (I-8), which the SSE endpoint sends as a comment line.
+        Polls with get_message(timeout=...) rather than wrapping a
+        blocking read in asyncio.wait_for, which would cancel this
+        generator for good on the first timeout. Note: as with the original in-memory
         implementation, an event published in the narrow window between
         subscribing and reading history back can appear twice (once via
         history, once via the live channel) — this was already true
@@ -74,7 +86,12 @@ class ReviewStreamManager:
             for raw in history:
                 yield json.loads(raw)
 
-            async for message in pubsub.listen():
+            deadline = time.monotonic() + max_seconds
+            while time.monotonic() < deadline:
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=keepalive_seconds)
+                if message is None:
+                    yield None  # keepalive
+                    continue
                 if message.get("type") != "message":
                     continue
                 yield json.loads(message["data"])
