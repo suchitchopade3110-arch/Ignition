@@ -71,6 +71,57 @@ The Auto-Fix step only runs on the path that finalizes a review — it's skipped
 
 **It checks cheap things first.** Rule-based checks run before any model is invoked at all — obvious violations get rejected in milliseconds, for free.
 
+## The dashboard
+
+The dashboard is where you watch a review run live, approve anything the Critic paused, and track architecture health over time. Everything below is the real UI, not a mockup.
+
+*Screenshots taken in demo mode (`NEXT_PUBLIC_DEMO_MODE=true`) with bundled sample data — repository names and scores are illustrative.*
+
+<p align="center">
+  <img src="./docs/assets/screenshots/03_review_detail.png" alt="Live review detail page showing the architecture score, overall severity and the agent progress timeline" width="100%"/>
+  <br/>
+  <b>Live review: ACS, severity, and the agent timeline streaming over SSE</b>
+</p>
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="./docs/assets/screenshots/01_command_center.png" alt="Command Center showing active reviews, pending approvals and average ACS" width="100%"/>
+      <br/><b>Command Center — active reviews, pending approvals, average ACS</b>
+    </td>
+    <td width="50%">
+      <img src="./docs/assets/screenshots/04_hitl_approvals.png" alt="Human-in-the-loop approval queue with a critical review awaiting approval" width="100%"/>
+      <br/><b>HITL queue — critical reviews wait here for a human</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="./docs/assets/screenshots/05_ledger.png" alt="Security Ledger showing the ACS trend line and regressions for a repository" width="100%"/>
+      <br/><b>Ledger — ACS trend and regressions per repository</b>
+    </td>
+    <td width="50%">
+      <img src="./docs/assets/screenshots/02_code_reviews.png" alt="Code Reviews table listing each run with its status and highest severity" width="100%"/>
+      <br/><b>Code Reviews — every run, its status and highest severity</b>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <img src="./docs/assets/screenshots/06_repositories.png" alt="Repositories page listing installed repositories and their compliance scores" width="100%"/>
+      <br/><b>Repositories — installed repos and their compliance scores</b>
+    </td>
+    <td width="50%"></td>
+  </tr>
+</table>
+
+<details>
+<summary>Landing page</summary>
+
+<p align="center">
+  <img src="./docs/assets/screenshots/07_landing_page.png" alt="Ignition landing page" width="100%"/>
+</p>
+
+</details>
+
 ## Under the hood
 
 | Layer | Choice |
