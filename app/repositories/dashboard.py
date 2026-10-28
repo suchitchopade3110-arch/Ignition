@@ -67,6 +67,22 @@ class ReviewRepository:
         )
         return res.data[0] if res.data else None
 
+    def get_last_completed_acs(self, repo_full_name: str, pr_number: int) -> float | None:
+        """The ACS of this PR's most recent completed review that has one
+        (audit P0-7: the merge baseline). A review whose 2A agent failed has
+        no ACS (P0-1) and is skipped."""
+        res = (
+            self._db.table(self.TABLE)
+            .select("acs_score")
+            .eq("repo_full_name", repo_full_name)
+            .eq("pr_number", pr_number)
+            .eq("status", "completed")
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+        )
+        return next((float(r["acs_score"]) for r in res.data or [] if r.get("acs_score") is not None), None)
+
     def get_check_run_id(self, review_id: str) -> int | None:
         """The review's GitHub check run (audit P0-6), or None if the webhook
         couldn't create one."""

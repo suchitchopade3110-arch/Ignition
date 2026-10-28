@@ -36,6 +36,8 @@ class PullRequestPayload(BaseModel):
     user: PullRequestUser | None = None
     # Drafts are skipped until they're marked ready for review (audit P1-8).
     draft: bool = False
+    # A "closed" event with merged=true writes a regression baseline (audit P0-7).
+    merged: bool = False
 
     @property
     def head_sha(self):

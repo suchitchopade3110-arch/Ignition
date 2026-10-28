@@ -37,6 +37,7 @@ from arq.worker import func
 from app.config import get_settings
 from app.services.redis_client import get_redis_settings
 from app.services.review_pipeline import run_review_job
+from app.services.merge_baseline import record_merge_baseline
 from app.services.reconciliation import reconcile_orphaned_reviews
 from app.services.logging_config import configure_logging
 from app.services.llm_client import get_llm_client
@@ -78,7 +79,7 @@ class WorkerSettings:
     # webhook — surprising given Phase 1's dedupe design assumes exactly
     # one execution per review. A human re-triggering via a fresh webhook/
     # PR sync is the intended recovery path, not a background auto-retry.
-    functions = [func(run_review_job, max_tries=1)]
+    functions = [func(run_review_job, max_tries=1), func(record_merge_baseline)]
     redis_settings: RedisSettings = get_redis_settings()
     on_startup = on_startup
 

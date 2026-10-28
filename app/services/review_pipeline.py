@@ -25,6 +25,7 @@ from app.services import check_runs
 from app.graph.workflow import build_graph
 from app.graph.state import ReviewState
 from app.repositories.dashboard import ReviewRepository, RepoRepository
+from app.repositories.ledger import LedgerRepository
 from app.services.logging_config import set_correlation_id
 
 logger = logging.getLogger(__name__)
@@ -220,22 +221,17 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
         except Exception as e:
             logger.exception("Failed to fetch PR diff: %s", e)
 
-    # Determine previous ACS score for regression tracking
+    # The repo's merge baseline (audit P0-7): the same median of recent
+    # merged PRs that the Critic's regression flag compares against, so the
+    # dashboard and the flag agree. 100.0 when the repo has no baseline yet
+    # (the regression flag can't fire then).
     previous_acs_score = 100.0
     try:
-        latest_completed_res = (
-            review_repo._db.table("reviews")
-            .select("acs_score")
-            .eq("repo_full_name", event.repository.full_name)
-            .eq("status", "completed")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if latest_completed_res.data and latest_completed_res.data[0].get("acs_score") is not None:
-            previous_acs_score = float(latest_completed_res.data[0]["acs_score"])
+        baseline = LedgerRepository().get_baseline(event.repository.full_name)
+        if baseline:
+            previous_acs_score = float(baseline["acs_score"])
     except Exception as e:
-        logger.warning("Could not query baseline review: %s", e)
+        logger.warning("Could not read the regression baseline: %s", e)
 
     # Save initial metadata
     review_repo.update_review(

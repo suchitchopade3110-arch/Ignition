@@ -280,6 +280,20 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         metrics.webhook_events_total.labels(event_type=event_type, outcome="rejected").inc()
         raise HTTPException(status_code=422, detail=f"Malformed webhook payload: {exc}")
 
+    # A merged PR becomes part of the repo's regression baseline (audit
+    # P0-7). One job per PR: Arq refuses a second job with the same id, so a
+    # redelivered "closed" event doesn't double-write.
+    if event.action == "closed" and event.pull_request.merged:
+        pool = await get_arq_pool()
+        await pool.enqueue_job(
+            "record_merge_baseline", event.repository.full_name, event.pull_request.number,
+            event.pull_request.head_sha,
+            _job_id=f"baseline:{event.repository.full_name}:{event.pull_request.number}",
+        )
+        logger.info("Merge baseline job enqueued", extra={"pr_number": event.pull_request.number})
+        metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
+        return {"status": "baseline_queued"}
+
     if event.action not in {"opened", "synchronize", "reopened", "ready_for_review"}:
         logger.info("Webhook action ignored", extra={"action": event.action})
         metrics.webhook_events_total.labels(event_type=event_type, outcome="ignored").inc()
