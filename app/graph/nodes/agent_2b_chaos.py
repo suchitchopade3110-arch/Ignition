@@ -49,7 +49,7 @@ async def agent_2b_chaos(state: ReviewState) -> dict:
         raw_response = await llm.complete(prompt, agent_name="agent_2b_chaos")
         findings = parse_findings_json(raw_response, agent_name="agent_2b_chaos")
     except Exception:
-        logger.exception("agent_2b_chaos LLM call failed; reporting no findings")
-        findings: list[Finding] = []
+        logger.exception("agent_2b_chaos LLM call failed; marking review incomplete")
+        return {"findings": [], "agent_errors": ["agent_2b_chaos"]}
 
     return {"findings": findings}

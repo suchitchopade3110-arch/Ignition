@@ -352,6 +352,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         hitl_severity = node_output.get("hitl_severity", "none")
                         is_regression = node_output.get("is_regression", False)
                         final_comment = node_output.get("final_comment_markdown")
+                        review_incomplete = node_output.get("review_incomplete", False)
 
                         # Map verified findings to schema format
                         mapped_findings = []
@@ -392,6 +393,10 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "final_comment_markdown": final_comment,
                                 "regression": regression_alert,
                                 "severity": hitl_severity,
+                                # Surfaced on the dashboard; never shown as a clean pass.
+                                "status_reason": "incomplete: one or more agents failed"
+                                if review_incomplete
+                                else None,
                             },
                         )
 

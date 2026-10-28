@@ -343,3 +343,29 @@ async def test_duplicate_webhook_delivery_does_not_start_second_run(fake_repos, 
     assert second.json()["reviewId"] == first.json()["reviewId"]
     # Only one enqueue_job call total, not two.
     assert mock_arq.enqueue_job.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_agents_mark_review_incomplete_not_clean(fake_repos, mock_externals, mock_arq):
+    """Audit P0-1: with every LLM call failing, the review must be recorded
+    as incomplete (dashboard status_reason, comment text), never as a
+    clean pass."""
+    fake_review_repo, _ = fake_repos
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/webhooks/github", content=body,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": _sign(body),
+                     "X-GitHub-Delivery": "incomplete-test-1"},
+        )
+    assert response.status_code == 202
+    event_payload, review_id, correlation_id = mock_arq.enqueue_job.call_args.args[1:4]
+
+    with patch.object(LLMClient, "complete", new=AsyncMock(side_effect=RuntimeError("model_decommissioned"))):
+        await run_review_job({}, event_payload, review_id, correlation_id)
+
+    final = fake_review_repo.get_review(review_id)
+    assert final["status_reason"] == "incomplete: one or more agents failed"
+    assert "Review incomplete" in final["final_comment_markdown"]
+    assert "Clean pass" not in final["final_comment_markdown"]

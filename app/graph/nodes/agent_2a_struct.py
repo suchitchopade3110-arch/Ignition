@@ -60,9 +60,10 @@ async def agent_2a_struct(state: ReviewState) -> dict:
         raw_response = await llm.complete(prompt, agent_name="agent_2a_struct")
         findings = parse_findings_json(raw_response, agent_name="agent_2a_struct")
     except Exception:
-        # An LLM outage/error for this one agent shouldn't fail the whole
-        # review — the other two sub-graphs and the Critic still run.
-        logger.exception("agent_2a_struct LLM call failed; reporting no findings")
-        findings: list[Finding] = []
+        # Don't fail the whole graph — but don't pretend this agent ran
+        # clean either. The Critic turns agent_errors into an explicit
+        # "review incomplete" verdict (fail closed, audit P0-1).
+        logger.exception("agent_2a_struct LLM call failed; marking review incomplete")
+        return {"findings": [], "agent_errors": ["agent_2a_struct"]}
 
     return {"findings": findings}

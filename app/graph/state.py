@@ -107,6 +107,11 @@ class ReviewState(BaseModel):
     # Written in parallel by Sub-Graphs A/B/C — reducer required
     findings: Annotated[list[Finding], merge_findings] = Field(default_factory=list)
 
+    # Agents whose LLM call (or response parsing) failed this run. Non-empty
+    # means the review is INCOMPLETE: "no findings" can no longer be read as
+    # "clean" (audit P0-1). Additive reducer — 2A/2B/2C write in parallel.
+    agent_errors: Annotated[list[str], operator.add] = Field(default_factory=list)
+
     # Written by the Critic
     verified_findings: list[Finding] = Field(default_factory=list)
     acs_score: float | None = None
@@ -130,6 +135,7 @@ class ReviewState(BaseModel):
 
     # Terminal
     final_comment_markdown: str | None = None
+    review_incomplete: bool = False
 
     # Set by agent_4_autofix — informational, not used in routing decisions
     autofix_posted: int = 0

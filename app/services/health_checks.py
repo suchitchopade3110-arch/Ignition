@@ -68,8 +68,16 @@ async def check_llm_provider() -> dict:
     not a second instance just for health checks."""
     start = time.monotonic()
     try:
-        client = get_llm_client().raw_client
-        await asyncio.wait_for(client.models.list(), timeout=_CHECK_TIMEOUT_SECONDS)
+        llm = get_llm_client()
+        models = await asyncio.wait_for(llm.raw_client.models.list(), timeout=_CHECK_TIMEOUT_SECONDS)
+        available = {m.id for m in getattr(models, "data", [])}
+        # Reachable is not enough: the configured model must still exist,
+        # or every completion fails while this stays green (audit P0-1).
+        if llm.model not in available:
+            return _result(
+                "unhealthy", int((time.monotonic() - start) * 1000),
+                f"configured model {llm.model!r} not offered by provider",
+            )
         return _result("healthy", int((time.monotonic() - start) * 1000))
     except asyncio.TimeoutError:
         return _result("unhealthy", int((time.monotonic() - start) * 1000), "timed out")

@@ -98,6 +98,10 @@ async def _fetch_publish_age_days(
         return None
 
 
+class Phase2Failed(Exception):
+    pass
+
+
 async def _phase2_semantic_slopsquat_check(
     package_name: str, publish_age_days: float | None
 ) -> list[Finding]:
@@ -116,19 +120,22 @@ async def _phase2_semantic_slopsquat_check(
     try:
         raw_response = await llm.complete(prompt, agent_name="agent_2c_security")
         return parse_findings_json(raw_response, agent_name="agent_2c_security")
-    except Exception:
-        logger.exception("agent_2c_security phase-2 LLM call failed for %s; skipping", package_name)
-        return []
+    except Exception as exc:
+        logger.exception("agent_2c_security phase-2 LLM call failed for %s", package_name)
+        raise Phase2Failed(package_name) from exc
 
 
 async def _process_package(
     client: httpx.AsyncClient, settings, name: str, version: str
-) -> list[Finding]:
+) -> tuple[list[Finding], bool]:
     """
     Everything for one package@version — phase 1 (OSV), phase 1.5 (publish
     age), phase 2 (LLM slopsquat check). These three stay sequential within
     a package (phase 2 needs phase 1.5's result to ground its prompt), but
     the caller runs this whole function concurrently across packages.
+
+    Returns (findings, llm_phase_failed): when only the LLM phase fails, the
+    deterministic phase-1/1.5 findings are kept and the gap is reported.
     """
     findings = await _phase1_deterministic_registry_check(client, name, version)
 
@@ -147,8 +154,12 @@ async def _process_package(
             )
         )
 
-    findings += await _phase2_semantic_slopsquat_check(name, publish_age_days)
-    return findings
+    try:
+        findings += await _phase2_semantic_slopsquat_check(name, publish_age_days)
+    except Phase2Failed:
+        # Keep the deterministic phase-1/1.5 findings; report the gap.
+        return findings, True
+    return findings, False
 
 
 async def agent_2c_security(state: ReviewState) -> dict:
@@ -171,5 +182,8 @@ async def agent_2c_security(state: ReviewState) -> dict:
             for name, version in changed_packages
         ))
 
-    findings = [f for package_findings in per_package_findings for f in package_findings]
-    return {"findings": findings}
+    findings = [f for package_findings, _ in per_package_findings for f in package_findings]
+    result: dict = {"findings": findings}
+    if any(failed for _, failed in per_package_findings):
+        result["agent_errors"] = ["agent_2c_security"]
+    return result

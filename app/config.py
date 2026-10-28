@@ -83,6 +83,10 @@ class Settings(BaseModel):
     llm_provider: str = ""
     llm_api_key: str = ""
     llm_model_name: str = ""
+    # Model-specific knob, not hard-coded in llm_client (audit P0-1):
+    # gpt-oss accepts low|medium|high, qwen3.x accepts none|default. Empty
+    # string omits the parameter entirely.
+    llm_reasoning_effort: str = ""
 
     # Supabase / pgvector
     supabase_url: str = ""
@@ -168,9 +172,10 @@ class Settings(BaseModel):
             metrics_enabled=str(kwargs.get("metrics_enabled", os.getenv("METRICS_ENABLED", "true"))).lower() in ("1", "true", "yes"),
             backend_base_url=kwargs.get("backend_base_url", os.getenv("BACKEND_BASE_URL", "http://localhost:8000")),
             frontend_base_url=kwargs.get("frontend_base_url", os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")),
-            llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "qwen")),
+            llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "groq")),
             llm_api_key=kwargs.get("llm_api_key", os.getenv("LLM_API_KEY", "")),
-            llm_model_name=kwargs.get("llm_model_name", os.getenv("LLM_MODEL_NAME", "qwen-3-480b")),
+            llm_model_name=kwargs.get("llm_model_name", os.getenv("LLM_MODEL_NAME", "openai/gpt-oss-120b")),
+            llm_reasoning_effort=kwargs.get("llm_reasoning_effort", os.getenv("LLM_REASONING_EFFORT", "low")),
             supabase_url=kwargs.get("supabase_url", os.getenv("SUPABASE_URL", "")),
             supabase_key=kwargs.get("supabase_key", os.getenv("SUPABASE_SERVICE_KEY", "")),
             ast_service_url=kwargs.get("ast_service_url", os.getenv("AST_SERVICE_URL", "http://localhost:4000")),

@@ -264,6 +264,8 @@ async def _record_incidents(repo_full_name: str, verified_findings: list[Finding
 
 async def agent_3_critic(state: ReviewState) -> dict:
     verified_findings, hallucinated_findings = _verify_findings(state)
+    failed_agents = sorted(set(state.agent_errors))
+    incomplete = bool(failed_agents)
 
     # ACS is denominated in dependency-graph edges, so only architecture
     # findings (Agent 2A — the only agent whose findings are claims about
@@ -285,6 +287,10 @@ async def agent_3_critic(state: ReviewState) -> dict:
     regression = is_rule_regression(
         acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
     )
+    if "agent_2a_struct" in failed_agents:
+        # ACS counts 2A findings; with 2A down the score is unknowable, not 100.
+        acs_score = None
+        regression = False
 
     hitl_severity = _decide_hitl_severity(verified_findings, ledger)
     if regression:
@@ -316,7 +322,10 @@ async def agent_3_critic(state: ReviewState) -> dict:
         "hitl_severity": hitl_severity,
         "critic_wants_retry": should_retry,
         "hallucination_retry_count": 1 if should_retry else 0,
-        "final_comment_markdown": _render_markdown(verified_findings, acs_score, regression, narrative),
+        "final_comment_markdown": _render_markdown(
+            verified_findings, acs_score, regression, narrative, failed_agents=failed_agents
+        ),
+        "review_incomplete": incomplete,
     }
     if should_retry:
         # ClearAgentFindings("agent_2a_struct"), not `[]` and not a full
@@ -343,13 +352,27 @@ async def agent_3_critic(state: ReviewState) -> dict:
 
 
 def _render_markdown(
-    findings: list[Finding], acs_score: float, regression: bool, narrative: str | None
+    findings: list[Finding],
+    acs_score: float | None,
+    regression: bool,
+    narrative: str | None,
+    failed_agents: list[str] | None = None,
 ) -> str:
-    lines = [f"## Ignition Review — ACS: {acs_score:.1f}"]
+    failed_agents = failed_agents or []
+    acs = "n/a" if acs_score is None else f"{acs_score:.1f}"
+    lines = [f"## Ignition Review — ACS: {acs}"]
+    if failed_agents:
+        lines.append(
+            "> **Review incomplete.** These checks did not run: "
+            + ", ".join(f"`{a}`" for a in failed_agents)
+            + ". Missing findings below do **not** mean the PR is clean."
+        )
     if regression:
         lines.append("**Rule regression detected against baseline.**")
     if narrative:
         lines.append(narrative)
     for f in findings:
         lines.append(f"- `[{f.severity.upper()}]` {f.file_path}: {f.description}")
-    return "\n".join(lines) if findings else "No findings. Clean pass."
+    if not findings and not failed_agents and not regression:
+        lines.append("No findings.")
+    return "\n".join(lines)
