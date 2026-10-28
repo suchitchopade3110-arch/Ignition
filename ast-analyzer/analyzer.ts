@@ -11,14 +11,17 @@ import { Project, SyntaxKind, Node } from "ts-morph";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { prepareSource, type AnalyzeSource } from "./source";
+import { prepareSource, git, type AnalyzeSource } from "./source";
 
 interface AnalyzeArgs {
   repoFullName: string;
   prNumber: number;
   source: AnalyzeSource;
-  baseRef: string;  // NEW — needed to diff package.json against
-  projectCache: Map<string, Project>;
+  baseRef: string;
+  /** Short-lived GitHub installation token for private repos. Never logged. */
+  authToken?: string;
+  /** Kept for signature compatibility; no longer used (fresh Project per review). */
+  projectCache?: Map<string, Project>;
 }
 
 interface SymbolRef {
@@ -70,12 +73,18 @@ function globsFor(sourceDir: string): string[] {
  * literals, comments, and pattern-definition arrays are structurally
  * invisible to this check, since they're never parsed as call expressions.
  */
-export function detectHardRuleViolations(file: ReturnType<Project["getSourceFiles"]>[number], relPath: string): string[] {
+export function detectHardRuleViolations(
+  file: ReturnType<Project["getSourceFiles"]>[number],
+  relPath: string,
+  addedLines?: Set<number>,
+): string[] {
   const violations: string[] = [];
   const callExpressions = file.getDescendantsOfKind(SyntaxKind.CallExpression);
 
   for (const call of callExpressions) {
     const line = call.getStartLineNumber();
+    // P0-2: only lines this PR added can "introduce" a violation.
+    if (addedLines && !addedLines.has(line)) continue;
     const expr = call.getExpression();
 
     // Direct eval(...) call — matches only a bare identifier named "eval",
@@ -175,20 +184,55 @@ interface ExtractedProjectData {
   hardRuleViolations: string[];
 }
 
+export interface ExtractScope {
+  /** Files this PR added/modified (repo-relative, posix). */
+  changed: Set<string>;
+  /** Added line numbers per changed file, from `git diff -U0`. */
+  addedLines: Map<string, Set<number>>;
+}
+
+function rel(sourceDir: string, abs: string): string {
+  return path.relative(sourceDir, abs).split(path.sep).join("/");
+}
+
 // Split out of analyzePullRequest so the symbol/dependency-graph/hard-rule
 // walk can be exercised directly against an in-memory ts-morph Project in
 // tests, without needing a real git clone or zip download through
 // prepareSource — see analyzer.test.ts.
-export function extractProjectData(project: Project, sourceDir: string): ExtractedProjectData {
+//
+// With a `scope` (every git-sourced review), output is limited to the diff
+// (audit P0-2): changed_files is exactly the PR's changed files, symbols
+// and edges cover changed files plus one hop, and hard rules apply only to
+// added lines. Without one (unit tests, zip sources) every file is in scope.
+export function extractProjectData(project: Project, sourceDir: string, scope?: ExtractScope): ExtractedProjectData {
   const sourceFiles = project.getSourceFiles();
   const changedFiles: string[] = [];
   const symbols: SymbolRef[] = [];
   const dependencyGraph: DependencyEdge[] = [];
   const hardRuleViolations: string[] = [];
 
+  // One hop of neighbours: files the changed files import, and files that
+  // import a changed file.
+  let inScope: Set<string> | null = null;
+  if (scope) {
+    inScope = new Set(scope.changed);
+    for (const file of sourceFiles) {
+      const from = rel(sourceDir, file.getFilePath());
+      for (const imp of file.getImportDeclarations()) {
+        const target = imp.getModuleSpecifierSourceFile();
+        if (!target) continue;
+        const to = rel(sourceDir, target.getFilePath());
+        if (scope.changed.has(from)) inScope.add(to);
+        if (scope.changed.has(to)) inScope.add(from);
+      }
+    }
+  }
+
   for (const file of sourceFiles) {
-    const relPath = path.relative(sourceDir, file.getFilePath());
-    changedFiles.push(relPath);
+    const relPath = rel(sourceDir, file.getFilePath());
+    if (inScope && !inScope.has(relPath)) continue;
+    const isChanged = !scope || scope.changed.has(relPath);
+    if (isChanged) changedFiles.push(relPath);
 
     for (const fn of file.getFunctions()) {
       symbols.push({
@@ -233,45 +277,101 @@ export function extractProjectData(project: Project, sourceDir: string): Extract
 
     for (const imp of file.getImportDeclarations()) {
       const resolved = imp.getModuleSpecifierSourceFile();
-      if (resolved) {
-        dependencyGraph.push({
-          from_file: relPath,
-          to_file: path.relative(sourceDir, resolved.getFilePath()),
-          imported_symbols: imp.getNamedImports().map((n) => n.getName()),
-        });
-      }
+      if (!resolved) continue;
+      const to = rel(sourceDir, resolved.getFilePath());
+      // Keep only edges that touch the diff (either end changed).
+      if (scope && !scope.changed.has(relPath) && !scope.changed.has(to)) continue;
+      dependencyGraph.push({
+        from_file: relPath,
+        to_file: to,
+        imported_symbols: imp.getNamedImports().map((n) => n.getName()),
+      });
     }
 
-    hardRuleViolations.push(...detectHardRuleViolations(file, relPath));
+    if (isChanged) {
+      hardRuleViolations.push(...detectHardRuleViolations(file, relPath, scope?.addedLines.get(relPath)));
+    }
   }
 
   return { changedFiles, symbols, dependencyGraph, hardRuleViolations };
 }
 
+const ANALYZABLE = /\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$/;
+
+/** Changed files and their added line numbers, from the real git diff. */
+export async function diffScope(gitDir: string, baseSha: string, headSha: string, token?: string): Promise<ExtractScope> {
+  const names = await git(["diff", "--name-only", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  const changed = new Set(names.split("\n").map((s) => s.trim()).filter((s) => s && ANALYZABLE.test(s)));
+
+  const addedLines = new Map<string, Set<number>>();
+  const patch = await git(["diff", "-U0", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  let current: string | null = null;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      current = line.startsWith("+++ b/") ? line.slice(6) : null;
+      if (current && !addedLines.has(current)) addedLines.set(current, new Set());
+    } else if (current && line.startsWith("@@")) {
+      const m = /\+(\d+)(?:,(\d+))?/.exec(line);
+      if (!m) continue;
+      const startLine = Number(m[1]);
+      const count = m[2] === undefined ? 1 : Number(m[2]);
+      for (let i = 0; i < count; i++) addedLines.get(current)!.add(startLine + i);
+    }
+  }
+  return { changed, addedLines };
+}
+
+function buildProject(sourceDir: string): Project {
+  const tsConfigPath = path.join(sourceDir, "tsconfig.json");
+  const hasTsConfig = existsSync(tsConfigPath);
+  const project = new Project({
+    tsConfigFilePath: hasTsConfig ? tsConfigPath : undefined,
+    skipAddingFilesFromTsConfig: !hasTsConfig,
+  });
+  if (!hasTsConfig) project.addSourceFilesAtPaths(globsFor(sourceDir));
+  return project;
+}
+
 export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzerPayload> {
-  const repoKey = args.repoFullName;
-  const sourceDir = await prepareSource(repoKey, args.source);
-  const project = getOrCreateProject(repoKey, sourceDir, args.projectCache);
+  const headSha = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
+  const prepared = await prepareSource(args.repoFullName, args.source, {
+    headSha,
+    baseSha: args.baseRef,
+    prNumber: args.prNumber,
+    authToken: args.authToken,
+  });
 
-  const { changedFiles, symbols, dependencyGraph, hardRuleViolations } = extractProjectData(project, sourceDir);
+  try {
+    // Fresh Project per review, built from this review's own worktree:
+    // no stale ASTs (P0-3). The warm part that matters — git history — lives
+    // in the shared mirror, so this costs a parse, not a clone.
+    const project = buildProject(prepared.dir);
+    const scope = prepared.gitDir ? await diffScope(prepared.gitDir, args.baseRef, headSha, args.authToken) : undefined;
+    const { changedFiles, symbols, dependencyGraph, hardRuleViolations } = extractProjectData(
+      project,
+      prepared.dir,
+      scope,
+    );
 
-  // NEW — package diffing, independent of the AST symbol walk above
-  const headRef = args.source.type === "git" ? args.source.ref ?? "HEAD" : "HEAD";
-  const [basePackages, headPackages] = await Promise.all([
-    getPackageJsonAtRef(sourceDir, args.baseRef),
-    getPackageJsonAtRef(sourceDir, headRef),
-  ]);
-  const changedPackages = diffPackages(basePackages, headPackages);
+    const [basePackages, headPackages] = prepared.gitDir
+      ? await Promise.all([
+          getPackageJsonAtRef(prepared.gitDir, args.baseRef, args.authToken),
+          getPackageJsonAtRef(prepared.gitDir, headSha, args.authToken),
+        ])
+      : [null, null];
 
-  return {
-    repo_full_name: args.repoFullName,
-    pr_number: args.prNumber,
-    changed_files: changedFiles,
-    symbols,
-    dependency_graph: dependencyGraph,
-    hard_rule_violations: hardRuleViolations,
-    changed_packages: changedPackages, // NEW
-  };
+    return {
+      repo_full_name: args.repoFullName,
+      pr_number: args.prNumber,
+      changed_files: changedFiles,
+      symbols,
+      dependency_graph: dependencyGraph,
+      hard_rule_violations: hardRuleViolations,
+      changed_packages: diffPackages(basePackages, headPackages),
+    };
+  } finally {
+    await prepared.cleanup();
+  }
 }
 
 /**
@@ -282,19 +382,12 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
  * predate one being added.
  */
 async function getPackageJsonAtRef(
-  sourceDir: string,
-  ref: string
+  gitDir: string,
+  ref: string,
+  token?: string
 ): Promise<Record<string, string> | null> {
   try {
-    const proc = Bun.spawn(["git", "show", `${ref}:package.json`], {
-      cwd: sourceDir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const output = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
-    if (exitCode !== 0) return null;
-
+    const output = await git(["show", `${ref}:package.json`], gitDir, token);
     const pkg = JSON.parse(output);
     return { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
   } catch {
@@ -320,10 +413,31 @@ export function diffPackages(
   for (const [name, version] of Object.entries(head)) {
     const baseVersion = base?.[name];
     if (baseVersion !== version) {
-      // Strip leading ^ or ~ range specifiers for a cleaner version string
-      changed.push({ name, version: version.replace(/^[\^~]/, "") });
+      const v = normalizeVersion(version);
+      if (v) changed.push(v.alias ? { name: v.alias, version: v.version } : { name, version: v.version });
     }
   }
 
   return changed;
+}
+
+/**
+ * Turns a declared range into a concrete version OSV/npm can look up, or
+ * null when there isn't one (workspace:, file:, link:, git URLs, tags).
+ * `npm:real-pkg@^1.2.3` aliases resolve to the real package name.
+ */
+export function normalizeVersion(spec: string): { version: string; alias?: string } | null {
+  let s = spec.trim();
+  let alias: string | undefined;
+  if (s.startsWith("npm:")) {
+    const at = s.lastIndexOf("@");
+    if (at <= 4) return null;
+    alias = s.slice(4, at);
+    s = s.slice(at + 1);
+  }
+  if (/^(workspace:|file:|link:|git|github:|https?:)/.test(s) || s.includes("/")) return null;
+  const m = /(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?(-[0-9A-Za-z.-]+)?/.exec(s);
+  if (!m) return null;
+  const part = (p?: string) => (p === undefined || p === "x" || p === "*" ? "0" : p);
+  return { version: `${m[1]}.${part(m[2])}.${part(m[3])}${m[4] ?? ""}`, alias };
 }

@@ -257,6 +257,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             clone_url=event.repository.clone_url,
             ref=event.pull_request.head_sha,
             base_ref=event.pull_request.base_sha,
+            auth_token=gh.installation_token if gh else None,
         )
 
         initial_state = ReviewState.from_ast_payload(ast_payload, event)

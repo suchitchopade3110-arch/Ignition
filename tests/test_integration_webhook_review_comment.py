@@ -369,3 +369,21 @@ async def test_failed_agents_mark_review_incomplete_not_clean(fake_repos, mock_e
     assert final["status_reason"] == "incomplete: one or more agents failed"
     assert "Review incomplete" in final["final_comment_markdown"]
     assert "Clean pass" not in final["final_comment_markdown"]
+
+
+@pytest.mark.asyncio
+async def test_pipeline_passes_installation_token_to_analyzer(fake_repos, mock_externals, mock_arq):
+    """Audit P0-8: the analyzer can only clone a private repo if the worker
+    hands it the installation token."""
+    mock_externals["github_instance"].installation_token = "ghs_installation"
+    body = json.dumps(_webhook_payload()).encode()
+    transport = httpx.ASGITransport(app=main_module.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post(
+            "/webhooks/github", content=body,
+            headers={"Content-Type": "application/json", "X-Hub-Signature-256": _sign(body),
+                     "X-GitHub-Delivery": "token-test-1"},
+        )
+    event_payload, review_id, correlation_id = mock_arq.enqueue_job.call_args.args[1:4]
+    await run_review_job({}, event_payload, review_id, correlation_id)
+    assert ASTClient.analyze_git.await_args.kwargs["auth_token"] == "ghs_installation"

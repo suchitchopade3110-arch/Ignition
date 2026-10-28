@@ -41,6 +41,7 @@ class GitHubClient:
         cached_token = redis.get(cache_key)
         if cached_token:
             logger.info("Reused cached installation token", extra={"installation_id": installation_id})
+            self._token = cached_token
             self._client = self._build_github(cached_token)
             return
 
@@ -68,7 +69,15 @@ class GitHubClient:
             "installation_id": installation_id, "cached_ttl_seconds": max(ttl_seconds, 0),
         })
 
+        self._token = token
         self._client = self._build_github(token)
+
+    @property
+    def installation_token(self) -> str:
+        """Short-lived (1h) installation token, scoped to this App's
+        permissions on this installation's repos. Handed to the AST analyzer
+        so it can clone private repos (audit P0-8). Never log it."""
+        return self._token
 
     @staticmethod
     def _build_github(token: str):
