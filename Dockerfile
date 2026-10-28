@@ -10,6 +10,9 @@ RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --require-hashes -r /tmp/requirements.txt
+# Bake the embedding model into the image (I-1): the worker never downloads
+# it at runtime, and runs with HF_HUB_OFFLINE=1.
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2', cache_dir='/opt/models')"
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
 RUN apt-get update \
@@ -17,7 +20,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --user-group --no-create-home --shell /usr/sbin/nologin ignition
 COPY --from=build /opt/venv /opt/venv
-ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=build /opt/models /opt/models
+ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    FASTEMBED_CACHE_PATH=/opt/models HF_HUB_OFFLINE=1
 WORKDIR /srv
 COPY app ./app
 USER 10001

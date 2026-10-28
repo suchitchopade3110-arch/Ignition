@@ -89,11 +89,21 @@ jobs:
       # `pip install -r requirements.txt` produces locally. Test-only
       # packages (pytest, pytest-asyncio) live in requirements-dev.txt so
       # they stay out of the production image.
+      # I-2: torch's CUDA wheels must never come back into the lockfile.
+      - name: No CUDA wheels in the lockfile
+        run: "! grep -E '^(nvidia-|triton|cuda-)' requirements.txt"
+
       - name: Install dependencies
         run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
         run: pytest tests/ -v
+
+      # The real embedding model (downloaded here; CI can reach Hugging Face).
+      - name: Embedder smoke test (real model)
+        env:
+          IGNITION_LIVE_MODEL_TESTS: "1"
+        run: pytest tests/test_fastembed_embedder.py -v -k real_model
 
   frontend:
     runs-on: ubuntu-latest

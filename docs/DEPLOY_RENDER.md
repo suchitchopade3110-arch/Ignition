@@ -130,14 +130,13 @@ update:
   first-party, `SESSION_COOKIE_SAMESITE=lax` works, and CORS preflights
   disappear. The SSE stream sends `X-Accel-Buffering: no` so the proxy
   doesn't hold events back.
-- **Image size**: `requirements.txt` currently resolves `torch` from
-  PyPI's default (CUDA-enabled) build via `sentence-transformers`, even
-  though this service is CPU-only — see the comment at the top of
-  `requirements.in`. This works on Render (nothing here actually loads
-  CUDA), but the image is multi-GB larger and slower to build than it
-  needs to be. Fixing it means regenerating `requirements.txt` from a
-  network context that can reach `download.pytorch.org` — see
-  `requirements.in` for the exact command and how to verify it worked.
+- **Embedder (I-1)**: the worker embeds with fastembed (ONNX Runtime, CPU
+  only; no torch or CUDA wheels — CI fails if `nvidia-*`, `triton` or
+  `cuda-*` ever reappear in `requirements.txt`). The model is baked into
+  the image at build time, so the build needs network access to Hugging
+  Face and the running worker doesn't. After switching from the old
+  sentence-transformers embedder, run `python scripts/reembed_incidents.py`
+  once from the worker's shell (`--dry-run` first).
 - **Cold starts**: the first review after a deploy is slower while the
   analyzer's Bun process and the worker's embedding model warm up.
 - **Deploys and in-flight reviews**: Render sends the worker SIGTERM and
