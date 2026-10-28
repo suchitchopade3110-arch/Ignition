@@ -168,6 +168,7 @@ cd Ignition
 
 # Python backend
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # pytest, only needed to run tests/
 cp .env.example .env   # bring your own credentials — never commit this file
 
 # AST analysis service
@@ -182,6 +183,7 @@ You'll need your own GitHub App, a Supabase project, and an LLM API key to actua
 ```bash
 pip install uv
 uv pip compile --generate-hashes --output-file=requirements.txt requirements.in
+uv pip compile --generate-hashes --output-file=requirements-dev.txt requirements-dev.in
 ```
 
 ```bash

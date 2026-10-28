@@ -86,9 +86,11 @@ jobs:
 
       # Installs from the fully pinned, hashed requirements.txt (not
       # requirements.in) — reproducible dependency tree, same one a fresh
-      # `pip install -r requirements.txt` produces locally.
+      # `pip install -r requirements.txt` produces locally. Test-only
+      # packages (pytest, pytest-asyncio) live in requirements-dev.txt so
+      # they stay out of the production image.
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Run tests
         run: pytest tests/ -v

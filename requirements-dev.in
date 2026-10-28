@@ -1,0 +1,7 @@
+# Test-only dependencies, kept out of the production image (solutions doc,
+# P2 "pytest in production"). Constrained to the production lockfile so
+# shared transitive packages resolve to the same pinned versions.
+#   uv pip compile --generate-hashes -c requirements.txt -o requirements-dev.txt requirements-dev.in
+-c requirements.txt
+pytest>=8.0
+pytest-asyncio>=0.24
