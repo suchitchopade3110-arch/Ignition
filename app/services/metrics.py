@@ -1,6 +1,6 @@
 """
-Prometheus metrics — GET /metrics (app/main.py), unauthenticated like
-/healthz (a scraper needs to reach it without a session).
+Prometheus metrics — GET /metrics (app/main.py), behind
+`Authorization: Bearer $METRICS_TOKEN` (I-11); no session needed.
 
 Deliberately not prometheus-fastapi-instrumentator or any other
 auto-instrumentation package: this app's most useful metrics are business

@@ -159,18 +159,30 @@ async def _record_http_metrics(request: Request, call_next):
     return response
 
 
+def _require_bearer(request: Request, expected: str) -> None:
+    """Operator endpoints (/metrics I-11, /readyz I-5): with a configured
+    token, the caller must send `Authorization: Bearer <token>` (compared in
+    constant time) or gets 401; with none configured, the endpoint is 404
+    in production and open in development."""
+    if not expected:
+        if settings.app_env == "production":
+            raise HTTPException(status_code=404, detail="Not Found")
+        return
+    supplied = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied.encode(), f"Bearer {expected}".encode()):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint(request: Request):
     """
-    Prometheus scrape target. Unauthenticated like /healthz — a scraper
-    needs to reach it without a session (same reasoning as /healthz's own
-    docstring). Gated on METRICS_ENABLED (app/config.py) rather than always
-    mounted, so a deployment that doesn't want operational metrics exposed
-    can omit the endpoint entirely instead of relying on network-level
-    blocking alone.
+    Prometheus scrape target, behind `Authorization: Bearer $METRICS_TOKEN`
+    (I-11; Prometheus sends it via `authorization: {credentials: ...}`).
+    No session needed. METRICS_ENABLED=false omits the endpoint entirely.
     """
     if not settings.metrics_enabled:
         raise HTTPException(status_code=404, detail="Not Found")
+    _require_bearer(request, settings.metrics_token)  # hmac.compare_digest inside
     return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -786,14 +798,7 @@ async def readyz(request: Request, response: Response):
     without a configured token it is 404 in production and open locally.
     Errors name only the exception class.
     """
-    expected = settings.readyz_token
-    if not expected:
-        if settings.app_env == "production":
-            raise HTTPException(status_code=404, detail="Not Found")
-    else:
-        supplied = request.headers.get("authorization", "")
-        if not hmac.compare_digest(supplied.encode(), f"Bearer {expected}".encode()):
-            raise HTTPException(status_code=401, detail="Missing or invalid token")
+    _require_bearer(request, settings.readyz_token)
 
     now = time.monotonic()
     cached = _readyz_cache.get("result")

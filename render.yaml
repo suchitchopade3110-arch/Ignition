@@ -73,6 +73,9 @@ services:
       # Bearer token for GET /readyz (I-5). Any long random string.
       - key: READYZ_TOKEN
         sync: false
+      # Bearer token for GET /metrics (I-11); Prometheus sends it.
+      - key: METRICS_TOKEN
+        sync: false
       # Same-origin topology (audit P0-5): the browser reaches this service
       # only through the frontend's /api and /auth rewrites, so cookies are
       # first-party and Lax is correct again.

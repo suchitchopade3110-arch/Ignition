@@ -79,13 +79,15 @@ class Settings(BaseModel):
     csrf_header_name: str = "X-CSRF-Token"
 
     # Prometheus /metrics endpoint (app/services/metrics.py). Unauthenticated
-    # like /healthz — same reasoning: a scraper needs to reach it without a
+    # behind METRICS_TOKEN (I-11) — a scraper needs to reach it without a
     # session. Defaults on; set false to omit the endpoint entirely rather
     # than exposing operational metrics on a deployment that doesn't want them.
     metrics_enabled: bool = True
     # Bearer token for GET /readyz, the deep dependency check (I-5). Unset:
     # /readyz is 404 in production and open in development.
     readyz_token: str = ""
+    # Bearer token for GET /metrics (I-11), same rule as readyz_token.
+    metrics_token: str = ""
 
     # Used to build the OAuth redirect_uri and the post-login redirect target
     backend_base_url: str = "http://localhost:8000"
@@ -185,6 +187,7 @@ class Settings(BaseModel):
             csrf_header_name=kwargs.get("csrf_header_name", os.getenv("CSRF_HEADER_NAME", "X-CSRF-Token")),
             metrics_enabled=str(kwargs.get("metrics_enabled", os.getenv("METRICS_ENABLED", "true"))).lower() in ("1", "true", "yes"),
             readyz_token=kwargs.get("readyz_token", os.getenv("READYZ_TOKEN", "")),
+            metrics_token=kwargs.get("metrics_token", os.getenv("METRICS_TOKEN", "")),
             backend_base_url=kwargs.get("backend_base_url", os.getenv("BACKEND_BASE_URL", "http://localhost:8000")),
             frontend_base_url=kwargs.get("frontend_base_url", os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")),
             llm_provider=kwargs.get("llm_provider", os.getenv("LLM_PROVIDER", "groq")),

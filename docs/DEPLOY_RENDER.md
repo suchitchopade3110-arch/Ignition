@@ -116,8 +116,10 @@ update:
   — checks real reachability of Supabase, the AST analyzer, the LLM
   provider, and Redis (cached 15 s). All green means the secrets from step 2
   are correct. Without the token it answers 401.
-- `GET https://<your-backend-host>/metrics` — Prometheus scrape target, if
-  you're wiring up monitoring.
+- `curl -H "Authorization: Bearer $METRICS_TOKEN" https://<your-backend-host>/metrics`
+  — Prometheus scrape target (I-11). In the scrape config set
+  `authorization: {credentials: <METRICS_TOKEN>}`. Without the token it
+  answers 401; with `METRICS_TOKEN` unset in production it answers 404.
 - Visit the frontend, log in via GitHub, install the App on a test repo,
   open a PR — confirms the webhook → review pipeline → dashboard path
   end-to-end.
