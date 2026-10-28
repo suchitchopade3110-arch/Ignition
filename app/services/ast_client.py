@@ -17,6 +17,10 @@ from app.schemas.ast_payload import ASTAnalyzerPayload
 
 class ASTClient:
     def __init__(self, base_url: str, timeout: float = 90.0):
+        # Render's private-network address comes as a bare "host:port"
+        # (render.yaml fromService hostport); add the scheme it lacks.
+        if "://" not in base_url:
+            base_url = f"http://{base_url}"
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 

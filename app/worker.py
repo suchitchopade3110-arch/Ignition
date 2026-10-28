@@ -99,7 +99,6 @@ class WorkerSettings:
 
     # Bounded drain: on SIGTERM/SIGINT, stop accepting new jobs and give
     # in-flight jobs up to this many seconds to finish before cancelling
-    # them. 25s leaves headroom under a typical 30s platform grace period
-    # (Docker/Railway/Render default `docker stop` grace windows are
-    # commonly 10-30s) without being so long the platform SIGKILLs first.
-    job_completion_wait = 25
+    # them. 50 s (I-3) fits inside render.yaml's maxShutdownDelaySeconds: 60
+    # for ignition-worker, so Render doesn't SIGKILL mid-drain.
+    job_completion_wait = 50

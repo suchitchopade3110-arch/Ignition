@@ -1,9 +1,20 @@
 # Deploying to Render
 
-This walks through a first deploy using `render.yaml` at the repo root. Two
-Render services (`ignition-backend`, `ignition-frontend`) plus one Redis
-instance (`ignition-redis`) — see the comments in `render.yaml` for why it's
-two services and not the four in `docker-compose.yml`.
+This walks through a first deploy using `render.yaml` at the repo root: one
+Render service per process (I-3), so each one is PID 1, gets SIGTERM on a
+deploy, and only the frontend and backend face the internet.
+
+| Service | Render type | Plan | Runs |
+|---|---|---|---|
+| `ignition-frontend` | web | 0.5c-512mb | `next start`; proxies `/api` and `/auth` to the backend (P0-5) |
+| `ignition-backend` | web | 0.5c-512mb | `uvicorn` only |
+| `ignition-worker` | worker | 1c-2g | `arq app.worker.WorkerSettings` (reviews, the embedder) |
+| `ignition-analyzer` | pserv | 1c-2g | Bun + ts-morph, private network only |
+| `ignition-redis` | keyvalue | starter (256 MB) | Arq queue, SSE, token cache, rate limits |
+
+The backend and the worker share one image (`Dockerfile`, different start
+commands); the analyzer has its own (`ast-analyzer/Dockerfile`). Both run as
+UID 10001 under `tini`.
 
 Render is one option, not the only one — everything here is Render-specific
 glue around the app's own config (`app/config.py`, `.env.example`); the app
@@ -42,17 +53,19 @@ rotate it later.
 
 1. Push this repo (with `render.yaml`) to GitHub if it isn't already there.
 2. Render dashboard → **New** → **Blueprint** → pick the repo.
-3. Render parses `render.yaml` and shows you three services to create.
-   Click through — it'll fail to actually start the backend and frontend
-   yet, because the secrets aren't filled in. That's expected; step 3
-   below fixes it.
+3. Render parses `render.yaml` and shows you the five services to create.
+   Click through — the backend, worker and frontend won't start yet,
+   because the secrets aren't filled in. That's expected; step 2 below
+   fixes it.
 
 ## 2. Fill in the secrets
 
 `render.yaml` marks the credential-shaped vars `sync: false`, which means
 Render creates the env var but leaves it blank for you to fill in — it
 won't try to manage or overwrite these. On `ignition-backend` → Environment,
-set:
+set the table below; on `ignition-worker` set the same `GITHUB_APP_*`,
+`GITHUB_PRIVATE_KEY`, `LLM_*` and `SUPABASE_*` values (the worker doesn't
+need the webhook secret, the OAuth client or `SESSION_TOKEN_KEYS`):
 
 | Var | Value |
 |---|---|
@@ -64,7 +77,7 @@ set:
 | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL_NAME` | e.g. `groq` / your Groq key / `openai/gpt-oss-120b` (plus `LLM_REASONING_EFFORT=low`) |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | from your Supabase project settings |
 
-Save changes — this triggers a redeploy of `ignition-backend`.
+Save changes — this triggers a redeploy of each service you edited.
 
 ## 3. Fix the hostnames (only if your service names collided)
 
@@ -125,7 +138,8 @@ update:
   needs to be. Fixing it means regenerating `requirements.txt` from a
   network context that can reach `download.pytorch.org` — see
   `requirements.in` for the exact command and how to verify it worked.
-- **Cold starts on Starter**: Render's Starter plan doesn't spin down like
-  Free does, but it's still a single small instance — the first review
-  after a deploy will be slower while the AST analyzer's Bun process and
-  the embedding model warm up.
+- **Cold starts**: the first review after a deploy is slower while the
+  analyzer's Bun process and the worker's embedding model warm up.
+- **Deploys and in-flight reviews**: Render sends the worker SIGTERM and
+  waits `maxShutdownDelaySeconds` (60) before SIGKILL; Arq stops taking
+  jobs and drains in-flight ones for `job_completion_wait` (50 s).
