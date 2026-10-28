@@ -4,6 +4,10 @@ repos and HITL queue. Each list endpoint is now scoped to the repos the
 user can push to (resolved from GitHub once, cached for 5 minutes), and an
 empty set short-circuits without querying at all.
 
+Since P1-1 (GitHub App login) the set comes from /user/installations plus
+/user/installations/{id}/repositories, so it only lists repos where
+Ignition is installed.
+
 Uses tests/fake_supabase.py so the real repository query code runs: a
 missing .in_() filter changes what these tests see.
 """
@@ -22,16 +26,19 @@ USERS = {
     "sess-bob": {"id": "u-bob", "github_id": 2, "login": "bob"},
     "sess-carol": {"id": "u-carol", "github_id": 3, "login": "carol"},
 }
-# What GET /user/repos returns for each user's token. alice can also *read*
-# bob's public repo — read-only access must not count.
-USER_REPOS = {
-    "tok-sess-alice": [
-        {"full_name": "alice/app", "permissions": {"admin": True, "push": True}},
-        {"full_name": "bob/svc", "permissions": {"pull": True}},
-    ],
-    "tok-sess-bob": [{"full_name": "bob/svc", "permissions": {"push": True}}],
-    "tok-sess-carol": [],
+# What GET /user/installations/{id}/repositories returns for each user's
+# token, per installation. alice can also *read* bob's public repo —
+# read-only access must not count. alice can push to alice/other, but
+# Ignition isn't installed there, so GitHub doesn't list it at all.
+USER_INSTALLATIONS = {
+    "tok-sess-alice": {
+        101: [{"full_name": "alice/app", "permissions": {"admin": True, "push": True}}],
+        202: [{"full_name": "bob/svc", "permissions": {"pull": True}}],
+    },
+    "tok-sess-bob": {202: [{"full_name": "bob/svc", "permissions": {"push": True}}]},
+    "tok-sess-carol": {},
 }
+USER_REPOS = {tok: [r for repos in insts.values() for r in repos] for tok, insts in USER_INSTALLATIONS.items()}
 
 
 def _review(rid, repo, status, acs=None, findings=0, created="2026-10-20T00:00:00+00:00"):
@@ -76,7 +83,14 @@ def world(monkeypatch):
         token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
         request = httpx.Request("GET", url)
         if "/user/repos" in url:
-            return httpx.Response(200, json=USER_REPOS[token], request=request)
+            raise AssertionError("repo set must come from /user/installations (P1-1), not /user/repos")
+        if "/user/installations/" in url and "/repositories" in url:
+            inst_id = int(url.split("/user/installations/", 1)[1].split("/", 1)[0])
+            repos = USER_INSTALLATIONS[token].get(inst_id, [])
+            return httpx.Response(200, json={"total_count": len(repos), "repositories": repos}, request=request)
+        if "/user/installations" in url:
+            installs = [{"id": i} for i in USER_INSTALLATIONS[token]]
+            return httpx.Response(200, json={"total_count": len(installs), "installations": installs}, request=request)
         if "/repos/" in url:  # per-repo fallback in check_repo_access
             full = url.split("/repos/", 1)[1]
             perms = next((r["permissions"] for r in USER_REPOS[token] if r["full_name"] == full), None)
@@ -136,7 +150,7 @@ async def test_user_with_no_repos_gets_empty_results_without_any_reviews_query(w
 async def test_repo_set_is_cached_for_five_minutes(world):
     await _get("/api/reviews", "sess-alice")
     await _get("/api/stats", "sess-alice")
-    assert sum("/user/repos" in u for u in world["github_calls"]) == 1
+    assert sum(u.split("?")[0].endswith("/user/installations") for u in world["github_calls"]) == 1
     assert world["redis"].ttls["user_repos:u-alice"] == 300
     assert json.loads(world["redis"].store["user_repos:u-alice"]) == ["alice/app"]
 

@@ -29,9 +29,11 @@ Windows. Verified instead inside an actual Linux container (Docker
 Desktop's containers are real Linux even on a Windows host), since
 production (the Dockerfile) runs Linux.
 """
+import asyncio
 import logging
 
 from arq.connections import RedisSettings
+from arq import cron
 from arq.worker import func
 
 from app.config import get_settings
@@ -69,6 +71,17 @@ async def on_startup(ctx: dict) -> None:
     await reconcile_orphaned_reviews()
 
 
+async def purge_expired_sessions(ctx: dict) -> int:
+    """Daily: DELETE FROM sessions WHERE expires_at < now() (audit P1-1).
+    Expired sessions are already refused at read time; this keeps their
+    encrypted tokens from piling up."""
+    from app.repositories.auth import AuthRepository
+
+    removed = await asyncio.to_thread(AuthRepository().purge_expired_sessions)
+    logger.info("Purged expired sessions", extra={"removed": removed})
+    return removed
+
+
 class WorkerSettings:
     # max_tries=1: a job cancelled by the shutdown drain timeout (or one
     # that raises) is a hard, final failure — run_review_job's
@@ -80,6 +93,7 @@ class WorkerSettings:
     # one execution per review. A human re-triggering via a fresh webhook/
     # PR sync is the intended recovery path, not a background auto-retry.
     functions = [func(run_review_job, max_tries=1), func(record_merge_baseline)]
+    cron_jobs = [cron(purge_expired_sessions, hour=3, minute=17)]
     redis_settings: RedisSettings = get_redis_settings()
     on_startup = on_startup
 

@@ -22,7 +22,7 @@ const practices = [
   },
   {
     title: "Least-privilege GitHub App access",
-    body: "Ignition authenticates to your repositories as a GitHub App, using short-lived installation tokens rather than a long-lived personal access token. Access is scoped to the repositories you explicitly install the app on.",
+    body: "Ignition authenticates to your repositories as a GitHub App, using short-lived installation tokens rather than a long-lived personal access token. Access is scoped to the repositories you explicitly install the app on. Dashboard sign-in uses the same GitHub App: it asks for no OAuth scopes, so your sign-in token can only do what the app's permissions allow, on repositories where it is installed. That token is encrypted at rest, refreshed when it expires, and revoked when you sign out.",
   },
   {
     title: "Secrets are never in source control",

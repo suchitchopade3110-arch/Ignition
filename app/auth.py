@@ -7,20 +7,25 @@ Flow:
   GET  /auth/me               -> current user (401 if no/invalid session)
   POST /auth/logout           -> destroy session
 
-This is a *separate* credential pair from the GitHub App's private key in
-app/security.py / app/services/github_client.py — that one signs JWTs for
-server-to-server installation tokens. This one is a normal OAuth app used
-only to establish "who is the human sitting at the browser."
+Login goes through the GitHub App's own OAuth flow (audit P1-1): the App's
+client id/secret, no scope parameter. A GitHub App user token can only do
+what the App's permissions allow, on repos where the App is installed and
+the user has access — never the old OAuth App's repo-wide `repo` scope.
+This is a *separate* credential pair from the App's private key in
+app/services/github_client.py, which signs JWTs for server-to-server
+installation tokens; this one only establishes "who is the human sitting
+at the browser."
 
 Authorization model: a request for a specific repo is only allowed if the
-signed-in user's own GitHub OAuth token can see that repo (GitHub's API
-enforces this for us — we don't try to duplicate GitHub's permission model
-locally). That access token is stored server-side in the `sessions` table
-and never touches the browser.
+signed-in user's own GitHub token can see that repo with write access
+(GitHub's API enforces this for us). The token is stored server-side,
+encrypted, in the `sessions` table and never touches the browser. Expiring
+user tokens are refreshed here when they run out; logout revokes them.
 """
 import json
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -28,7 +33,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.repositories.auth import AuthRepository
+from app.repositories.auth import AuthRepository, UndecryptableSession
 from app.repositories.dashboard import RepoRepository, ReviewRepository
 from app.services.rate_limiter import limiter
 from app.services.redis_client import get_pubsub_redis
@@ -45,6 +50,8 @@ GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_API_BASE = "https://api.github.com"
+# Refresh a user token this long before GitHub says it expires.
+_TOKEN_REFRESH_SKEW_SECONDS = 60
 
 _OAUTH_STATE_COOKIE = "ignition_oauth_state"
 # How long a user's resolved repo set is reused before asking GitHub again
@@ -68,6 +75,64 @@ def _new_session_id() -> str:
 # Defined before the route handlers below since /auth/me depends on
 # get_current_user via FastAPI's Depends().
 
+def _logged_out(session_id: str, reason: str) -> HTTPException:
+    """Ends a session that can't be used any more and returns the 401 to
+    raise. Never a 500: the user just signs in again."""
+    logger.info("Ending session: %s", reason)
+    try:
+        _auth_repo.delete_session(session_id)
+    except Exception:
+        logger.warning("Could not delete the unusable session", exc_info=True)
+    return HTTPException(status_code=401, detail="Session invalid or expired")
+
+
+async def _refresh_user_token(session_id: str, session: dict) -> dict:
+    """Swaps an expired GitHub App user token for a new one (audit P1-1).
+    Refresh tokens are single-use, so when two requests race, the loser's
+    refresh fails; it then re-reads the session and uses the winner's."""
+    settings = get_settings()
+    refresh_expires = session.get("github_refresh_token_expires_at")
+    if not session.get("github_refresh_token") or (
+        refresh_expires and refresh_expires <= datetime.now(timezone.utc)
+    ):
+        raise _logged_out(session_id, "GitHub token expired and cannot be refreshed")
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                GITHUB_TOKEN_URL,
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.github_client_id,
+                    "client_secret": settings.github_client_secret,
+                    "grant_type": "refresh_token",
+                    "refresh_token": session["github_refresh_token"],
+                },
+            )
+        data = res.json()
+    except Exception:
+        logger.warning("GitHub token refresh failed (network)", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not refresh your GitHub sign-in; try again")
+
+    if not data.get("access_token"):
+        latest = _auth_repo.get_session_with_user(session_id)
+        if latest and latest.get("github_token_expires_at") and _token_is_fresh(latest):
+            return latest  # another request refreshed it first
+        raise _logged_out(session_id, f"GitHub refused the token refresh ({data.get('error', 'no token')})")
+
+    _auth_repo.update_session_tokens(
+        session_id, data["access_token"], data.get("expires_in"),
+        data.get("refresh_token"), data.get("refresh_token_expires_in"),
+    )
+    return {**session, "github_access_token": data["access_token"]}
+
+
+def _token_is_fresh(session: dict) -> bool:
+    expires = session.get("github_token_expires_at")
+    if not expires:
+        return True  # token expiry is off for this App: tokens don't expire
+    return expires > datetime.now(timezone.utc) + timedelta(seconds=_TOKEN_REFRESH_SKEW_SECONDS)
+
+
 async def get_current_user(request: Request) -> AuthUser:
     settings = get_settings()
     session_id = request.cookies.get(settings.session_cookie_name)
@@ -76,12 +141,17 @@ async def get_current_user(request: Request) -> AuthUser:
 
     try:
         session = _auth_repo.get_session_with_user(session_id)
+    except UndecryptableSession:
+        # A plaintext row from before P1-1, or a rotated-out key.
+        raise _logged_out(session_id, "stored token cannot be decrypted")
     except Exception:
         logger.exception("Session lookup failed (datastore unreachable?)")
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
 
     if not session:
         raise HTTPException(status_code=401, detail="Session invalid or expired")
+    if not _token_is_fresh(session):
+        session = await _refresh_user_token(session_id, session)
 
     u = session["user"]
     # Stashed for the repo-access dependencies below, and never sent back
@@ -128,20 +198,29 @@ async def get_accessible_repos(request: Request, user: AuthUser = Depends(get_cu
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # With GitHub App user tokens (audit P1-1) the set comes from the App's
+    # installations the user can see, so it only lists repos where Ignition
+    # is installed.
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     repos: set[str] = set()
-    url = f"{GITHUB_API_BASE}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
     async with httpx.AsyncClient(timeout=10.0) as client:
-        while url:
-            res = await client.get(
-                url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-            )
-            if res.status_code != 200:
-                logger.error("GitHub /user/repos returned %s", res.status_code)
-                raise HTTPException(status_code=502, detail="Could not resolve your repositories from GitHub")
-            for repo in res.json():
+
+        async def pages(url: str, key: str):
+            while url:
+                res = await client.get(url, headers=headers)
+                if res.status_code != 200:
+                    logger.error("GitHub %s returned %s", url.split("?")[0], res.status_code)
+                    raise HTTPException(status_code=502, detail="Could not resolve your repositories from GitHub")
+                for item in res.json().get(key, []):
+                    yield item
+                url = res.links.get("next", {}).get("url")
+
+        installation_ids = [i["id"] async for i in pages(f"{GITHUB_API_BASE}/user/installations?per_page=100", "installations")]
+        for installation_id in installation_ids:
+            url = f"{GITHUB_API_BASE}/user/installations/{installation_id}/repositories?per_page=100"
+            async for repo in pages(url, "repositories"):
                 if _can_write(repo.get("permissions")):
                     repos.add(repo["full_name"])
-            url = res.links.get("next", {}).get("url")
 
     if redis is not None:
         try:
@@ -252,10 +331,11 @@ async def github_login(request: Request):
 
     state = secrets.token_urlsafe(24)
     redirect_uri = f"{settings.backend_base_url}/auth/github/callback"
+    # No scope parameter (audit P1-1): GitHub App user tokens get exactly
+    # the App's permissions, on repos where it's installed.
     params = {
         "client_id": settings.github_client_id,
         "redirect_uri": redirect_uri,
-        "scope": "read:user repo",
         "state": state,
     }
     response = Response(status_code=302)
@@ -298,7 +378,9 @@ async def github_callback(
         token_data = token_res.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            logger.error("GitHub OAuth token exchange failed: %s", token_data)
+            # Error fields only: a failed exchange has no token to leak, but
+            # don't log the raw response anyway.
+            logger.error("GitHub OAuth token exchange failed: %s", token_data.get("error"))
             raise HTTPException(status_code=401, detail="GitHub OAuth token exchange failed")
 
         user_res = await client.get(
@@ -317,12 +399,20 @@ async def github_callback(
     )
 
     session_id = _new_session_id()
-    _auth_repo.create_session(
-        session_id=session_id,
-        user_id=user_row["id"],
-        github_access_token=access_token,
-        ttl_seconds=settings.session_ttl_seconds,
-    )
+    try:
+        _auth_repo.create_session(
+            session_id=session_id,
+            user_id=user_row["id"],
+            github_access_token=access_token,
+            ttl_seconds=settings.session_ttl_seconds,
+            expires_in=token_data.get("expires_in"),
+            refresh_token=token_data.get("refresh_token"),
+            refresh_token_expires_in=token_data.get("refresh_token_expires_in"),
+        )
+    except RuntimeError:
+        # SESSION_TOKEN_KEYS unset: fail closed rather than store a token in plaintext.
+        logger.exception("Cannot create a session")
+        raise HTTPException(status_code=500, detail="Login is not configured on this server")
 
     response = Response(status_code=302)
     response.headers["Location"] = f"{settings.frontend_base_url}/dashboard"
@@ -353,11 +443,36 @@ async def github_callback(
     return response
 
 
+async def _revoke_github_token(token: str) -> None:
+    """DELETE /applications/{client_id}/token (audit P1-1). Best-effort:
+    the session row is deleted whether or not GitHub answers."""
+    settings = get_settings()
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.request(
+                "DELETE",
+                f"{GITHUB_API_BASE}/applications/{settings.github_client_id}/token",
+                auth=(settings.github_client_id, settings.github_client_secret),
+                json={"access_token": token},
+                headers={"Accept": "application/vnd.github+json"},
+            )
+        if res.status_code not in (204, 404):
+            logger.warning("GitHub token revocation returned %s", res.status_code)
+    except Exception:
+        logger.warning("GitHub token revocation failed", exc_info=True)
+
+
 @router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     settings = get_settings()
     session_id = request.cookies.get(settings.session_cookie_name)
     if session_id:
+        try:
+            session = _auth_repo.get_session_with_user(session_id)
+        except Exception:
+            session = None  # undecryptable or unreachable: nothing to revoke
+        if session:
+            await _revoke_github_token(session["github_access_token"])
         _auth_repo.delete_session(session_id)
     response.delete_cookie(settings.session_cookie_name)
     response.delete_cookie(settings.csrf_cookie_name)

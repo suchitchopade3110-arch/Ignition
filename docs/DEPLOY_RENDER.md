@@ -22,7 +22,7 @@ webhooks, and reviews will all fail. Have these ready:
 - **A Supabase project** (URL + service key) — Postgres + pgvector. Run the
   `migrations*.sql` files at the repo root against it, in order
   (`migrations.sql` first, then `migrations_002_...` through the
-  highest-numbered file, currently `migrations_016_...`) — Supabase's SQL
+  highest-numbered file, currently `migrations_017_...`) — Supabase's SQL
   Editor works fine for this, or `psql` if you'd rather. **Skipping 012
   makes every review that has a finding fail** (the Critic reads
   `hitl_finding_outcomes`). **013 turns on row-level security**: before
@@ -59,7 +59,8 @@ set:
 | `GITHUB_APP_ID` | from your GitHub App's settings page |
 | `GITHUB_PRIVATE_KEY` | the full contents of the `.pem` you downloaded, including `-----BEGIN/END-----` lines |
 | `GITHUB_WEBHOOK_SECRET` | whatever you set as the App's webhook secret |
-| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | from the OAuth App (or the GitHub App's OAuth section) |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | the **GitHub App's** Client ID and a client secret generated on the App's settings page (dashboard login uses the App's own OAuth flow; no separate OAuth App) |
+| `SESSION_TOKEN_KEYS` | one Fernet key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`); to rotate, put the new key first and the old one second, comma-separated. Login refuses to work without it. |
 | `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL_NAME` | e.g. `groq` / your Groq key / `openai/gpt-oss-120b` (plus `LLM_REASONING_EFFORT=low`) |
 | `SUPABASE_URL` / `SUPABASE_SERVICE_KEY` | from your Supabase project settings |
 

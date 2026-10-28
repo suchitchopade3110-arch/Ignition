@@ -43,7 +43,8 @@ class Settings(BaseModel):
     # secret stays valid.
     github_webhook_secret_previous: str = ""
 
-    # GitHub OAuth (Sign in with GitHub) — separate credential pair from the
+    # Dashboard login (Sign in with GitHub) uses the GitHub App's own OAuth
+    # client id/secret (audit P1-1) — a separate credential pair from the
     # App's private key above. Used only for user login/session, never for
     # server-to-server installation calls.
     # The App's URL slug; its comments are authored by "<slug>[bot]". Used to
@@ -51,6 +52,11 @@ class Settings(BaseModel):
     github_app_slug: str = ""
     github_client_id: str = ""
     github_client_secret: str = ""
+    # Comma-separated Fernet keys that encrypt users' GitHub tokens at rest
+    # (audit P1-1). The first key encrypts; every key decrypts, so listing
+    # a new key first and the old one second rotates without logging
+    # anyone out. Required for login: with none set, login fails closed.
+    session_token_keys: str = ""
 
     # Session cookies issued after OAuth login
     session_cookie_name: str = "ignition_session"
@@ -167,6 +173,7 @@ class Settings(BaseModel):
             github_app_slug=kwargs.get("github_app_slug", os.getenv("GITHUB_APP_SLUG", "")),
             github_client_id=kwargs.get("github_client_id", os.getenv("GITHUB_CLIENT_ID", "")),
             github_client_secret=kwargs.get("github_client_secret", os.getenv("GITHUB_CLIENT_SECRET", "")),
+            session_token_keys=kwargs.get("session_token_keys", os.getenv("SESSION_TOKEN_KEYS", "")),
             session_cookie_name=kwargs.get("session_cookie_name", os.getenv("SESSION_COOKIE_NAME", "ignition_session")),
             session_ttl_seconds=int(kwargs.get("session_ttl_seconds", os.getenv("SESSION_TTL_SECONDS", str(60 * 60 * 24 * 7)))),
             session_cookie_secure=str(kwargs.get("session_cookie_secure", os.getenv("SESSION_COOKIE_SECURE", "false"))).lower() in ("1", "true", "yes"),

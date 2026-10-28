@@ -87,6 +87,9 @@ services:
         sync: false
       - key: GITHUB_CLIENT_SECRET
         sync: false
+      # Fernet key(s) encrypting users' GitHub tokens at rest (audit P1-1).
+      - key: SESSION_TOKEN_KEYS
+        sync: false
       - key: LLM_PROVIDER
         sync: false
       - key: LLM_API_KEY

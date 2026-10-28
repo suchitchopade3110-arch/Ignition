@@ -43,3 +43,6 @@ pyjwt>=2.15.0
 urllib3>=2.8.0
 # multidict's fix (PYSEC-2026-4244) is in 6.9.1; stay in major 6.
 multidict>=6.9.1,<7
+# Encrypts users' GitHub tokens at rest (audit P1-1, MultiFernet). Already
+# installed through pyjwt[crypto]; listed because app code imports it.
+cryptography>=46
