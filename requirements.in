@@ -12,8 +12,10 @@ groq>=0.11
 # Embedder for RAG similarity search (app/rag/vector_store.py): the same
 # sentence-transformers/all-MiniLM-L6-v2 model on ONNX Runtime, CPU only,
 # instead of sentence-transformers + torch and its CUDA wheels (I-1, I-2).
-# Pinned to a release at least two weeks old; bump deliberately.
-fastembed==0.9.0
+# Pinned to a release at least two weeks old; bump deliberately. Exception:
+# 0.9.1 (4 days old) is the first that allows pillow 13, which fixes 38
+# advisories pip-audit flags on pillow 12 (I-12).
+fastembed==0.9.1
 arq>=0.28
 redis>=5.0
 slowapi>=0.1.9
