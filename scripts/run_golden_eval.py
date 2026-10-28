@@ -26,15 +26,20 @@ release on a single-digit fixture count would be more noise than signal.
 """
 import asyncio
 import sys
+from pathlib import Path
 
-from app.graph.nodes.agent_1_gate import agent_1_gate
-from app.graph.nodes.agent_2a_struct import agent_2a_struct
-from app.graph.nodes.agent_2b_chaos import agent_2b_chaos
-from app.graph.nodes.agent_2c_security import agent_2c_security
-from app.graph.nodes.agent_3_critic import agent_3_critic
-from app.graph.state import ReviewState
-from tests.eval.fixtures import GoldenPR, GOLDEN_PRS
-from tests.eval.metrics import EvalResult, score_findings
+# Run as `python scripts/run_golden_eval.py` (CI's golden-eval job), so the
+# repo root isn't on sys.path by default.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.graph.nodes.agent_1_gate import agent_1_gate  # noqa: E402
+from app.graph.nodes.agent_2a_struct import agent_2a_struct  # noqa: E402
+from app.graph.nodes.agent_2b_chaos import agent_2b_chaos  # noqa: E402
+from app.graph.nodes.agent_2c_security import agent_2c_security  # noqa: E402
+from app.graph.nodes.agent_3_critic import agent_3_critic  # noqa: E402
+from app.graph.state import ReviewState  # noqa: E402
+from tests.eval.fixtures import GoldenPR, GOLDEN_PRS  # noqa: E402
+from tests.eval.metrics import EvalResult, score_findings  # noqa: E402
 
 MIN_F1 = 0.6  # advisory threshold; see module docstring on why it isn't a hard CI gate yet
 
