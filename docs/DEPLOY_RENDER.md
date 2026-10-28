@@ -52,6 +52,37 @@ webhooks, and reviews will all fail. Have these ready:
 `docs/SECRET_ROTATION.md` documents what each of these does and how to
 rotate it later.
 
+### Tracked migrations (Supabase CLI)
+
+Every migration is also in `supabase/migrations/`, a byte-identical copy
+of the root file with a timestamp prefix that keeps the order
+(`20260101000001_initial_schema.sql` is `migrations.sql`,
+`20260101000002_auth.sql` is `migrations_002_auth.sql`, and so on;
+`tests/test_tracked_migrations.py` keeps them in step). With the CLI the
+project records what it has applied, instead of you remembering.
+
+- **A new Supabase project:** `supabase link --project-ref <ref>`, then
+  `supabase db push`. It applies all of them in order.
+- **A project where you already ran migrations by hand:** don't push yet.
+  The CLI doesn't know about them and would run them again. Mark each one
+  you already applied first, then push the rest:
+
+  ```bash
+  supabase link --project-ref <ref>
+  # one version per migration already applied, e.g. 001 to 019:
+  supabase migration repair --status applied 20260101000001 20260101000002 ... 20260101000019
+  supabase migration list   # Local and Remote columns now match up to 019
+  supabase db push          # applies only what's left (here: 020)
+  ```
+
+  To find what's applied, the startup check names anything missing
+  ("Required Supabase tables are missing or unreadable: ...").
+  `select column_name from information_schema.columns where table_name = 'repositories'`
+  shows whether 011 (`installed`) and 020 (`github_repo_id`) ran.
+
+A new migration gets both files: `migrations_NNN_name.sql` at the root and
+its copy `supabase/migrations/20260101000NNN_name.sql`.
+
 ## 1. First blueprint sync
 
 1. Push this repo (with `render.yaml`) to GitHub if it isn't already there.
