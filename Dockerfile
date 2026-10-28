@@ -25,6 +25,8 @@ ENV PATH=/opt/venv/bin:$PATH PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
     FASTEMBED_CACHE_PATH=/opt/models HF_HUB_OFFLINE=1
 WORKDIR /srv
 COPY app ./app
+# One-off maintenance run from the worker's shell (I-1 re-embed).
+COPY scripts/reembed_incidents.py ./scripts/reembed_incidents.py
 USER 10001
 EXPOSE 8000
 ENTRYPOINT ["/usr/bin/tini", "--"]

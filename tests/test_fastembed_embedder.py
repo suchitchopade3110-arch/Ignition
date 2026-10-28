@@ -82,6 +82,8 @@ def test_the_image_bakes_the_model_and_runs_offline():
     assert "TextEmbedding(model_name='sentence-transformers/all-MiniLM-L6-v2'" in build
     assert "COPY --from=build /opt/models /opt/models" in runtime
     assert re.search(r"FASTEMBED_CACHE_PATH=/opt/models", runtime) and re.search(r"HF_HUB_OFFLINE=1", runtime)
+    # The one-time re-embed runs from the worker's shell, so the script ships in the image.
+    assert "COPY scripts/reembed_incidents.py ./scripts/reembed_incidents.py" in runtime
 
 
 # --- scripts/reembed_incidents.py ----------------------------------------------------
