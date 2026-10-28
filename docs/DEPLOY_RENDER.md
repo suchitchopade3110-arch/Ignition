@@ -21,10 +21,15 @@ webhooks, and reviews will all fail. Have these ready:
   installation" on the GitHub App above and reuse its Client ID/Secret.
 - **A Supabase project** (URL + service key) — Postgres + pgvector. Run the
   `migrations*.sql` files at the repo root against it, in order
-  (`migrations.sql` first, then `migrations_002_...` through
-  `migrations_012_...`) — Supabase's SQL Editor works fine for this, or
-  `psql` if you'd rather. **Skipping 012 makes every review that has a
-  finding fail** (the Critic reads `hitl_finding_outcomes`).
+  (`migrations.sql` first, then `migrations_002_...` through the
+  highest-numbered file, currently `migrations_013_...`) — Supabase's SQL
+  Editor works fine for this, or `psql` if you'd rather. **Skipping 012
+  makes every review that has a finding fail** (the Critic reads
+  `hitl_finding_outcomes`). **013 turns on row-level security**: before
+  running it, confirm `SUPABASE_SERVICE_KEY` is the `service_role` key, or
+  the backend loses access too. This prints only the key's role claim:
+  `python3 -c 'import os,base64,json; p=os.environ["SUPABASE_SERVICE_KEY"].split(".")[1]; print(json.loads(base64.urlsafe_b64decode(p+"="*(-len(p)%4)))["role"])'`
+  — it must print `service_role`.
 - **An LLM API key** — Groq by default (`LLM_PROVIDER=groq`, free tier
   available), or whatever `app/services/llm_client.py` supports.
 
