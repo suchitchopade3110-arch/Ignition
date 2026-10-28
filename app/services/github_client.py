@@ -33,6 +33,7 @@ _TOKEN_REFRESH_MARGIN_SECONDS = 300  # refresh if less than 5 min would remain
 # comment that starts with this AND is authored by the App's bot user is
 # ever edited, so nobody can make Ignition overwrite their own comment.
 STICKY_MARKER = "<!-- ignition:review -->"
+SUGGESTIONS_MARKER = "<!-- ignition:suggestions -->"
 
 
 @lru_cache
@@ -158,19 +159,22 @@ class GitHubClient:
         })
         return comment.raw_data
 
-    def post_inline_suggestion(
-        self, repo_full_name: str, pr_number: int, file_path: str, line: int, patch: str
-    ) -> None:
-        """Posts an auto-fix suggestion as an inline review comment."""
+    def post_suggestion_review(self, repo_full_name: str, pr_number: int, head_sha: str, body: str,
+                               comments: list[dict], bot_login: str) -> bool:
+        """All of a review's auto-fix suggestions as ONE COMMENT review on the
+        head commit (P2 auto-fix), at most once per head SHA: False, and
+        nothing posted, if Ignition already left its suggestion review on
+        that commit. `comments` are {path, line, side, body} on added lines."""
         repo = self._client.get_repo(repo_full_name)
         pr = repo.get_pull(pr_number)
-        commit = repo.get_commit(pr.head.sha)
-        pr.create_review_comment(
-            body=f"```suggestion\n{patch}\n```",
-            commit=commit,
-            path=file_path,
-            line=line,
-        )
+        head_sha = head_sha or pr.head.sha
+        for review in pr.get_reviews():
+            if (review.user and review.user.login == bot_login and review.commit_id == head_sha
+                    and (review.body or "").startswith(SUGGESTIONS_MARKER)):
+                return False
+        pr.create_review(commit=repo.get_commit(head_sha), event="COMMENT",
+                         body=f"{SUGGESTIONS_MARKER}\n{body}", comments=comments)
+        return True
 
     def get_pr_diff(self, repo_full_name: str, pr_number: int) -> str:
         """

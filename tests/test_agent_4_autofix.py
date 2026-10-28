@@ -1,6 +1,6 @@
 """
 agent_4_autofix is the one node in the graph that writes to GitHub outside
-the final review comment — it posts inline `suggestion` review comments —
+the final review comment — it posts one review of `suggestion` comments —
 so a bug here shows up as junk pushed onto someone's real PR, not just a
 wrong dashboard value. It had zero test coverage before this file.
 """
@@ -20,11 +20,19 @@ def _finding(file_path="a.ts", line=10, severity="medium", patch="fixed()", agen
     )
 
 
+# Lines 1-9 of a.ts and b.ts are added by the PR, so suggestions on them can
+# be inline (solutions doc, P2 auto-fix: inline only on added lines).
+DIFF = "".join(
+    f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -0,0 +1,9 @@\n" + "+x\n" * 9 for p in ("a.ts", "b.ts")
+)
+
+
 def _make_state(verified_findings: list[Finding]) -> ReviewState:
     return ReviewState(
         repo_full_name="acme/widgets",
         pr_number=42,
         installation_id=12345,
+        diff_text=DIFF,
         ast_payload=ASTAnalyzerPayload(
             repo_full_name="acme/widgets", pr_number=42,
             changed_files=[], symbols=[], dependency_graph=[], hard_rule_violations=[],
@@ -82,7 +90,9 @@ class TestAgentAutofix:
             result = await agent_4_autofix(state)
 
         assert result == {"autofix_posted": 2, "autofix_failed": 0}
-        assert mock_client.post_inline_suggestion.call_count == 2
+        # One review carrying both suggestions (solutions doc, P2 auto-fix).
+        mock_client.post_suggestion_review.assert_called_once()
+        assert len(mock_client.post_suggestion_review.call_args.kwargs["comments"]) == 2
 
     @pytest.mark.asyncio
     async def test_conflicting_findings_at_the_same_location_post_only_the_resolved_one(self):
@@ -95,19 +105,20 @@ class TestAgentAutofix:
             result = await agent_4_autofix(state)
 
         assert result == {"autofix_posted": 1, "autofix_failed": 0}
-        mock_client.post_inline_suggestion.assert_called_once_with(
-            repo_full_name="acme/widgets", pr_number=42,
-            file_path="a.ts", line=5, patch="patch-critical",
-        )
+        assert mock_client.post_suggestion_review.call_args.kwargs["comments"] == [
+            {"path": "a.ts", "line": 5, "side": "RIGHT", "body": "```suggestion\npatch-critical\n```"},
+        ]
 
     @pytest.mark.asyncio
-    async def test_a_failed_post_is_counted_and_does_not_abort_the_remaining_suggestions(self):
+    async def test_a_failed_post_is_counted_and_does_not_abort_the_review(self):
+        # One review now (solutions doc, P2 auto-fix), so a failed post
+        # counts every suggestion in it as failed, and never raises.
         state = _make_state([_finding(file_path="a.ts", line=1), _finding(file_path="b.ts", line=2)])
         mock_client = MagicMock()
-        mock_client.post_inline_suggestion.side_effect = [Exception("GitHub 422"), None]
+        mock_client.post_suggestion_review.side_effect = Exception("GitHub 422")
 
         with patch("app.services.github_client.GitHubClient", return_value=mock_client):
             result = await agent_4_autofix(state)
 
-        assert result == {"autofix_posted": 1, "autofix_failed": 1}
-        assert mock_client.post_inline_suggestion.call_count == 2
+        assert result == {"autofix_posted": 0, "autofix_failed": 2}
+        assert mock_client.post_suggestion_review.call_count == 1

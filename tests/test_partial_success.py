@@ -49,7 +49,7 @@ async def _run(fake_repos, mock_arq):
 
 def _suggestion_calls(gh) -> list[int]:
     return [i for i, c in enumerate(gh.mock_calls)
-            if c[0].endswith(("post_inline_suggestion", "create_review"))]
+            if c[0].endswith(("post_suggestion_review", "post_inline_suggestion", "create_review"))]
 
 
 @pytest.mark.asyncio
