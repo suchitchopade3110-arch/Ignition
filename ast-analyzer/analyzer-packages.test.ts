@@ -106,6 +106,9 @@ describe("changedPackages on a real monorepo", () => {
     write("packages/web/package.json",
       JSON.stringify({ name: "web", dependencies: { react: "^18.3.1", "left-pad": "^1.3.0" } }));
     write("package-lock.json", HEAD_LOCK);
+    // A new workspace whose dependency no lockfile covers (e.g. not yet
+    // installed): only its own package.json can report it.
+    write("packages/cli/package.json", JSON.stringify({ name: "cli", dependencies: { commander: "^12.1.0" } }));
     write("vendor/node_modules/evil/package.json", JSON.stringify({ name: "evil", dependencies: { x: "1.0.0" } }));
     sh(["add", "-A", "-f"]); sh(["commit", "-qm", "head"]);
     head = sh(["rev-parse", "HEAD"]);
@@ -118,6 +121,7 @@ describe("changedPackages on a real monorepo", () => {
     const changed = await changedPackages(gitDir, base, head);
     expect(changed.sort((a, b) => a.name.localeCompare(b.name))).toEqual([
       { name: "@scope/pkg", version: "2.0.0" },
+      { name: "commander", version: "12.1.0" },
       { name: "left-pad", version: "1.3.0" },
       { name: "loose-envify", version: "1.4.1", previous_version: "1.4.0" },
     ]);
