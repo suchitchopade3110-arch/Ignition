@@ -46,6 +46,8 @@ def route_hitl(state: ReviewState) -> str:
     Deterministic HITL gate: keyed off the structured severity enum the
     Critic outputs, never a subjective confidence score.
     """
-    if state.hitl_severity == "critical":
+    if state.hitl_severity == "critical" and state.enable_hitl:
         return "pause_for_human_approval"
+    # HITL off for this repo (audit P1-5): post anyway. The comment keeps
+    # each finding's severity label, so a human still sees a critical one.
     return "finalize_and_post"

@@ -137,6 +137,13 @@ class FakeRepoRepo:
     def __init__(self):
         self.repos: dict[str, dict] = {}
         self.stats_calls: list[dict] = []
+        # Repo settings the review job loads first (audit P1-5). Everything
+        # on except auto-fix, matching the database defaults; tests may edit.
+        self.settings = {
+            "enable_ai_review": True, "enable_auto_fix": False, "enable_hitl": True,
+            "security_scan": True, "architecture_scan": True, "logic_scan": True,
+        }
+        self.settings_requests: list[str] = []
 
     def get_or_create_repo(self, repo_full_name):
         repo_id = repo_full_name.replace("/", "_")
@@ -145,6 +152,10 @@ class FakeRepoRepo:
 
     def update_repo_stats(self, repo_full_name, acs_score, last_review_at):
         self.stats_calls.append({"repo_full_name": repo_full_name, "acs_score": acs_score})
+
+    def get_or_create_settings(self, repo_id, repo_full_name=None):
+        self.settings_requests.append(repo_id)
+        return dict(self.settings)
 
 
 def _sign(body: bytes) -> str:
@@ -201,7 +212,7 @@ def fake_repos(monkeypatch):
     for name in ("create_review", "update_review", "get_review",
                  "get_review_by_repo_pr_sha", "get_review_github_context", "get_check_run_id"):
         monkeypatch.setattr(review_repo, name, getattr(fake_review_repo, name), raising=False)
-    for name in ("get_or_create_repo", "update_repo_stats"):
+    for name in ("get_or_create_repo", "update_repo_stats", "get_or_create_settings"):
         monkeypatch.setattr(repo_repo, name, getattr(fake_repo_repo, name))
     # The one call site that touches review_repo._db directly (the
     # previous-ACS-score lookup) rather than going through a named method.

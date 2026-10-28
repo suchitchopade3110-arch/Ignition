@@ -108,6 +108,15 @@ class ReviewState(BaseModel):
     diff_text: str = ""
     ast_payload: ASTAnalyzerPayload
 
+    # The repo's settings (audit P1-5), loaded by run_review_job before the
+    # graph starts; routing reads them. Defaults are "everything on" so a
+    # state built without settings behaves as before.
+    enabled_agents: list[str] = Field(
+        default_factory=lambda: ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]
+    )
+    enable_hitl: bool = True
+    enable_auto_fix: bool = True
+
     # Written once by Agent 1
     hard_rule_violation: bool = False
     rejection_reason: str | None = None

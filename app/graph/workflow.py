@@ -80,7 +80,9 @@ def route_after_gate_combined(state: ReviewState) -> list[str]:
     decision = route_after_gate(state)
     if decision == "direct_rejection":
         return ["direct_rejection"]
-    return ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]
+    # Only the scans the repo has turned on (audit P1-5); none at all goes
+    # straight to the Critic.
+    return list(state.enabled_agents) or ["agent_3_critic"]
 
 
 def route_after_critic_combined(state: ReviewState) -> str:
@@ -97,7 +99,10 @@ def route_after_critic_combined(state: ReviewState) -> str:
     retry_or_hitl = route_after_critic(state)
     if retry_or_hitl == "retry_structural_recheck":
         return "retry_structural_recheck"
-    return route_hitl(state)
+    decision = route_hitl(state)
+    if decision == "finalize_and_post" and not state.enable_auto_fix:
+        return "finalize_without_autofix"  # auto-fix off for this repo (audit P1-5)
+    return decision
 
 
 def build_graph():
@@ -123,6 +128,7 @@ def build_graph():
             "agent_2a_struct": "agent_2a_struct",
             "agent_2b_chaos": "agent_2b_chaos",
             "agent_2c_security": "agent_2c_security",
+            "agent_3_critic": "agent_3_critic",
         },
     )
 
@@ -142,6 +148,7 @@ def build_graph():
             "retry_structural_recheck": "agent_2a_struct",
             "pause_for_human_approval": "pause_for_human_approval",
             "finalize_and_post": "agent_4_autofix",
+            "finalize_without_autofix": "finalize_and_post",
         },
     )
 

@@ -316,8 +316,9 @@ async def agent_3_critic(state: ReviewState) -> dict:
     regression = is_rule_regression(
         acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
     )
-    if "agent_2a_struct" in failed_agents:
-        # ACS counts 2A findings; with 2A down the score is unknowable, not 100.
+    if "agent_2a_struct" in failed_agents or "agent_2a_struct" not in state.enabled_agents:
+        # ACS counts 2A findings; with 2A down (or switched off for the
+        # repo, audit P1-5) the score is unknowable, not 100.
         acs_score = None
         regression = False
 

@@ -184,6 +184,37 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
         metrics.reviews_completed_total.labels(status=status).inc()
         metrics.review_duration_seconds.observe(time.monotonic() - _job_start_time)
 
+    # 0. The repo's settings (audit P1-5), before anything touches GitHub,
+    # the analyzer or an LLM. Unreadable settings fail closed: the owner
+    # may have turned AI review off, so the code is not sent anywhere.
+    try:
+        cfg = repo_repo.get_or_create_settings(event.repository.full_name.replace("/", "_"))
+    except Exception:
+        logger.exception("Could not load repo settings", extra={"review_id": review_id})
+        status_reason = "failed: could not load repo settings"
+        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
+        await stream_manager.publish(review_id, {"type": "review.failed", "reviewId": review_id, "status": "failed"})
+        _record_terminal_metric("failed")
+        await check.could_not_finish(status_reason)
+        return
+    if not cfg.get("enable_ai_review", True):
+        logger.info("AI review disabled for this repo", extra={"review_id": review_id})
+        review_repo.update_review(
+            review_id, {"status": "completed", "status_reason": "AI review disabled for this repo"}
+        )
+        await stream_manager.publish(
+            review_id, {"type": "review.completed", "reviewId": review_id, "status": "completed"}
+        )
+        _record_terminal_metric("completed")
+        await check.conclude("neutral", "AI review disabled for this repo")
+        return
+    enabled_agents = [agent for agent, flag in (
+        ("agent_2a_struct", cfg.get("architecture_scan", True)),
+        ("agent_2b_chaos", cfg.get("logic_scan", True)),
+        ("agent_2c_security", cfg.get("security_scan", True)),
+    ) if flag]
+    enable_auto_fix = bool(cfg.get("enable_auto_fix", False))
+
     # 1. Reconstruct pull request info from GitHub Integration
     title = f"PR #{event.pull_request.number}"
     author = "unknown"
@@ -296,6 +327,12 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
             "findingCount": 0,
         },
     }
+    # A scan or auto-fix that's off for this repo gets no timeline row (P1-5).
+    for agent_id in ("agent_2a_struct", "agent_2b_chaos", "agent_2c_security"):
+        if agent_id not in enabled_agents:
+            del agents_progress[agent_id]
+    if not enable_auto_fix:
+        del agents_progress["agent_4_autofix"]
 
     review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
     await stream_manager.publish(
@@ -323,6 +360,9 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
 
         initial_state = ReviewState.from_ast_payload(ast_payload, event)
         initial_state.diff_text = diff_text
+        initial_state.enabled_agents = enabled_agents
+        initial_state.enable_hitl = bool(cfg.get("enable_hitl", True))
+        initial_state.enable_auto_fix = enable_auto_fix
 
         # 3. Stream graph steps, bounded by review_latency_budget_seconds —
         # wraps ONLY the graph execution (not the diff fetch above it), per
@@ -356,7 +396,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
 
                         if not violation:
                             # Fan out parallel specialists
-                            for agent_id in ["agent_2a_struct", "agent_2b_chaos", "agent_2c_security"]:
+                            for agent_id in enabled_agents:
                                 agents_progress[agent_id]["status"] = "running"
                                 await stream_manager.publish(
                                     review_id,
@@ -365,6 +405,11 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                                         "reviewId": review_id,
                                         "agentId": agent_id,
                                     },
+                                )
+                            if not enabled_agents:  # every scan off: straight to the Critic (P1-5)
+                                agents_progress["agent_3_critic"]["status"] = "running"
+                                await stream_manager.publish(
+                                    review_id, {"type": "critic.started", "reviewId": review_id}
                                 )
                             review_repo.update_review(
                                 review_id, {"agents": list(agents_progress.values())}
@@ -388,9 +433,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
 
                         # Trigger Critic if specialists are done
                         if (
-                            agents_progress["agent_2a_struct"]["status"] == "completed"
-                            and agents_progress["agent_2b_chaos"]["status"] == "completed"
-                            and agents_progress["agent_2c_security"]["status"] == "completed"
+                            all(agents_progress[a]["status"] == "completed" for a in enabled_agents)
                             and agents_progress["agent_3_critic"]["status"] == "pending"
                         ):
                             agents_progress["agent_3_critic"]["status"] = "running"
