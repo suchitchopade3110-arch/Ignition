@@ -1,0 +1,37 @@
+{
+  "generated_by": "ast-analyzer/scripts/golden-fixtures.ts",
+  "diff_text": "diff --git a/src/repositories/user_repo.ts b/src/repositories/user_repo.ts\nindex 4001e00..6e7bd06 100644\n--- a/src/repositories/user_repo.ts\n+++ b/src/repositories/user_repo.ts\n@@ -1,5 +1,6 @@\n+import { httpClient } from '../http/client';\n export class UserRepo {\n   async getUser(id: string) {\n-    return { id };\n+    return httpClient.get(`/users/${id}`);\n   }\n }\n",
+  "ast_payload": {
+    "repo_full_name": "acme/widgets",
+    "pr_number": 101,
+    "changed_files": [
+      "src/repositories/user_repo.ts"
+    ],
+    "symbols": [
+      {
+        "file_path": "src/http/client.ts",
+        "symbol_name": "httpClient",
+        "kind": "variable",
+        "line": 1
+      },
+      {
+        "file_path": "src/repositories/user_repo.ts",
+        "symbol_name": "UserRepo",
+        "kind": "class",
+        "line": 2
+      }
+    ],
+    "dependency_graph": [
+      {
+        "from_file": "src/repositories/user_repo.ts",
+        "to_file": "src/http/client.ts",
+        "imported_symbols": [
+          "httpClient"
+        ]
+      }
+    ],
+    "hard_rule_violations": [],
+    "changed_packages": [],
+    "boundary_spec_yaml": null
+  }
+}

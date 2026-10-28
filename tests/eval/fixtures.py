@@ -10,7 +10,11 @@ good. This file is the fixture format that question needs; see
 scripts/run_golden_eval.py for how to point it at a real model.
 
 24 fixtures, hand-authored (not pulled from real GitHub PRs — this is a
-demo app with no production history to promote incidents from yet).
+demo app with no production history to promote incidents from yet). Three
+of them (layer_crossing_repository_to_http_client,
+hard_gate_rejects_eval_call_in_added_code and
+off_by_one_in_pagination_slice) take their diff and AST payload from real
+analyzer output in tests/eval/real/ (see _real below).
 Deliberately varied rather than exhaustive:
   - Architecture (agent_2a_struct): a contextual layer-crossing judgment
     call, a genuine `fact_checked` boundary violation, an API contract
@@ -47,6 +51,7 @@ Two notes on realism trade-offs, both deliberate:
    known-CVE and typosquat fixtures below use old, stable, well-documented
    npm packages precisely so their OSV/naming signal won't drift.
 """
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +60,18 @@ from tests.eval.metrics import ExpectedFinding
 
 # The spec the boundary fixtures' "repo" ships (audit P1-10).
 EXAMPLE_BOUNDARY_SPEC = (Path(__file__).resolve().parents[2] / "docs" / "examples" / "ignition.boundaries.yaml").read_text()
+
+# Fixtures regenerated from REAL analyzer output (P0-2 follow-up):
+# ast-analyzer/scripts/golden-fixtures.ts builds each as a two-commit git
+# repo, runs analyzePullRequest, and records the real `git diff` and payload
+# here. Nothing in these is hand-written; expected_findings still are.
+_REAL_DIR = Path(__file__).resolve().parent / "real"
+
+
+def _real(name: str) -> dict:
+    record = json.loads((_REAL_DIR / f"{name}.json").read_text())
+    return {"diff_text": record["diff_text"],
+            "ast_payload": ASTAnalyzerPayload.model_validate(record["ast_payload"])}
 
 
 @dataclass(frozen=True)
@@ -71,36 +88,7 @@ GOLDEN_PRS: list[GoldenPR] = [
     # ---------------------------------------------------------------
     GoldenPR(
         name="layer_crossing_repository_to_http_client",
-        diff_text=(
-            "diff --git a/src/repositories/user_repo.ts b/src/repositories/user_repo.ts\n"
-            "--- a/src/repositories/user_repo.ts\n"
-            "+++ b/src/repositories/user_repo.ts\n"
-            "@@ -1,3 +1,4 @@\n"
-            "+import { httpClient } from '../http/client';\n"
-            " export class UserRepo {\n"
-            "   async getUser(id: string) {\n"
-            "+    return httpClient.get(`/users/${id}`);\n"
-            "   }\n"
-            " }\n"
-        ),
-        ast_payload=ASTAnalyzerPayload(
-            repo_full_name="acme/widgets",
-            pr_number=101,
-            changed_files=["src/repositories/user_repo.ts"],
-            symbols=[
-                SymbolRef(file_path="src/repositories/user_repo.ts", symbol_name="UserRepo", kind="class", line=2),
-                SymbolRef(file_path="src/repositories/user_repo.ts", symbol_name="getUser", kind="function", line=3),
-            ],
-            dependency_graph=[
-                DependencyEdge(
-                    from_file="src/repositories/user_repo.ts",
-                    to_file="src/http/client.ts",
-                    imported_symbols=["httpClient"],
-                ),
-            ],
-            hard_rule_violations=[],
-            changed_packages=[],
-        ),
+        **_real("layer_crossing_repository_to_http_client"),
         expected_findings=[
             ExpectedFinding(
                 file_path="src/repositories/user_repo.ts",
@@ -422,27 +410,7 @@ GOLDEN_PRS: list[GoldenPR] = [
     ),
     GoldenPR(
         name="off_by_one_in_pagination_slice",
-        diff_text=(
-            "diff --git a/src/services/pagination_service.ts b/src/services/pagination_service.ts\n"
-            "--- a/src/services/pagination_service.ts\n"
-            "+++ b/src/services/pagination_service.ts\n"
-            "@@ -1,4 +1,4 @@\n"
-            " export function getPage<T>(items: T[], pageIndex: number, pageSize: number): T[] {\n"
-            "-  return items.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);\n"
-            "+  return items.slice(pageIndex * pageSize, pageIndex * pageSize + pageSize - 1);\n"
-            " }\n"
-        ),
-        ast_payload=ASTAnalyzerPayload(
-            repo_full_name="acme/widgets",
-            pr_number=203,
-            changed_files=["src/services/pagination_service.ts"],
-            symbols=[
-                SymbolRef(file_path="src/services/pagination_service.ts", symbol_name="getPage", kind="function", line=1),
-            ],
-            dependency_graph=[],
-            hard_rule_violations=[],
-            changed_packages=[],
-        ),
+        **_real("off_by_one_in_pagination_slice"),
         expected_findings=[
             ExpectedFinding(
                 file_path="src/services/pagination_service.ts",
@@ -689,28 +657,7 @@ GOLDEN_PRS: list[GoldenPR] = [
     # ---------------------------------------------------------------
     GoldenPR(
         name="hard_gate_rejects_eval_call_in_added_code",
-        diff_text=(
-            "diff --git a/src/utils/dynamic_runner.ts b/src/utils/dynamic_runner.ts\n"
-            "--- a/src/utils/dynamic_runner.ts\n"
-            "+++ b/src/utils/dynamic_runner.ts\n"
-            "@@ -1,3 +1,5 @@\n"
-            " export function runExpression(expr: string) {\n"
-            "+  return eval(expr);\n"
-            " }\n"
-        ),
-        ast_payload=ASTAnalyzerPayload(
-            repo_full_name="acme/widgets",
-            pr_number=401,
-            changed_files=["src/utils/dynamic_runner.ts"],
-            symbols=[
-                SymbolRef(file_path="src/utils/dynamic_runner.ts", symbol_name="runExpression", kind="function", line=1),
-            ],
-            dependency_graph=[],
-            # What the analyzer reports for the added eval() line. The gate no
-            # longer substring-scans the diff (P1-9), so it relies on this.
-            hard_rule_violations=["Direct eval() call found in src/utils/dynamic_runner.ts:2"],
-            changed_packages=[],
-        ),
+        **_real("hard_gate_rejects_eval_call_in_added_code"),
         expected_findings=[],
     ),
     GoldenPR(

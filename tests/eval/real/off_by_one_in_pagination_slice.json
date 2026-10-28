@@ -1,0 +1,23 @@
+{
+  "generated_by": "ast-analyzer/scripts/golden-fixtures.ts",
+  "diff_text": "diff --git a/src/services/pagination_service.ts b/src/services/pagination_service.ts\nindex 17a64a0..36355ec 100644\n--- a/src/services/pagination_service.ts\n+++ b/src/services/pagination_service.ts\n@@ -1,3 +1,3 @@\n export function getPage<T>(items: T[], pageIndex: number, pageSize: number): T[] {\n-  return items.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);\n+  return items.slice(pageIndex * pageSize, pageIndex * pageSize + pageSize - 1);\n }\n",
+  "ast_payload": {
+    "repo_full_name": "acme/widgets",
+    "pr_number": 203,
+    "changed_files": [
+      "src/services/pagination_service.ts"
+    ],
+    "symbols": [
+      {
+        "file_path": "src/services/pagination_service.ts",
+        "symbol_name": "getPage",
+        "kind": "function",
+        "line": 1
+      }
+    ],
+    "dependency_graph": [],
+    "hard_rule_violations": [],
+    "changed_packages": [],
+    "boundary_spec_yaml": null
+  }
+}

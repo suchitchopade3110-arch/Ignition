@@ -1,0 +1,25 @@
+{
+  "generated_by": "ast-analyzer/scripts/golden-fixtures.ts",
+  "diff_text": "diff --git a/src/utils/dynamic_runner.ts b/src/utils/dynamic_runner.ts\nindex 1d00cb5..9a7bfc6 100644\n--- a/src/utils/dynamic_runner.ts\n+++ b/src/utils/dynamic_runner.ts\n@@ -1,3 +1,3 @@\n export function runExpression(expr: string) {\n-  return Number(expr);\n+  return eval(expr);\n }\n",
+  "ast_payload": {
+    "repo_full_name": "acme/widgets",
+    "pr_number": 401,
+    "changed_files": [
+      "src/utils/dynamic_runner.ts"
+    ],
+    "symbols": [
+      {
+        "file_path": "src/utils/dynamic_runner.ts",
+        "symbol_name": "runExpression",
+        "kind": "function",
+        "line": 1
+      }
+    ],
+    "dependency_graph": [],
+    "hard_rule_violations": [
+      "Direct eval() call found in src/utils/dynamic_runner.ts:2"
+    ],
+    "changed_packages": [],
+    "boundary_spec_yaml": null
+  }
+}
