@@ -261,7 +261,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     event_type = request.headers.get("X-GitHub-Event", "pull_request")
     logger.info("Webhook received", extra={"delivery_id": delivery_id, "event_type": event_type})
     if event_type in ("installation", "installation_repositories"):
-        _handle_installation_event(event_type, payload)
+        await asyncio.to_thread(_handle_installation_event, event_type, payload)
         metrics.webhook_events_total.labels(event_type=event_type, outcome="processed").inc()
         return {"status": "processed", "event": event_type}
     if event_type not in ("pull_request", "ping"):
@@ -307,7 +307,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     review_id = str(uuid.uuid4())
 
     # Ensure repository is registered
-    repo_repo.get_or_create_repo(event.repository.full_name)
+    await asyncio.to_thread(repo_repo.get_or_create_repo, event.repository.full_name)
 
     # Idempotency: a duplicate delivery for the same (repo, PR, head commit)
     # must not spawn a second LangGraph run. Enforced as a DB-level unique
@@ -319,7 +319,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
     # whole point is to stop the second run from starting at all, not to
     # detect and clean up after two runs already kicked off.
     try:
-        review_repo.create_review(
+        await asyncio.to_thread(review_repo.create_review,
             review_id=review_id,
             repo_full_name=event.repository.full_name,
             pr_number=event.pull_request.number,
@@ -332,7 +332,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         )
     except APIError as exc:
         if exc.code == "23505" or "duplicate key" in (exc.message or "").lower():
-            existing = review_repo.get_review_by_repo_pr_sha(
+            existing = await asyncio.to_thread(review_repo.get_review_by_repo_pr_sha,
                 repo_full_name=event.repository.full_name,
                 pr_number=event.pull_request.number,
                 commit_sha=event.pull_request.head_sha,
@@ -369,7 +369,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
             check_runs.create_check_run_sync,
             event.installation.id, event.repository.full_name, event.pull_request.head_sha,
         )
-        review_repo.update_review(review_id, {"check_run_id": check_run_id})
+        await asyncio.to_thread(review_repo.update_review, review_id, {"check_run_id": check_run_id})
     except Exception:
         logger.exception("Could not create the GitHub check run", extra={"review_id": review_id})
 
@@ -390,7 +390,7 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
         "run_review_job", event.model_dump(mode="json"), review_id, correlation_id,
         _job_id=f"review:{event.repository.full_name}:{event.pull_request.number}:{event.pull_request.head_sha}",
     )
-    review_repo.update_review(review_id, {"job_id": job.job_id if job else None})
+    await asyncio.to_thread(review_repo.update_review, review_id, {"job_id": job.job_id if job else None})
     logger.info("Review job enqueued", extra={"review_id": review_id, "job_id": job.job_id if job else None})
     metrics.webhook_events_total.labels(event_type=event_type, outcome="queued").inc()
 
@@ -407,22 +407,22 @@ api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @api_router.get("/stats", response_model=DashboardStats)
-async def get_stats(repos: frozenset[str] = Depends(get_accessible_repos)):
+def get_stats(repos: frozenset[str] = Depends(get_accessible_repos)):
     return DashboardStats(**review_repo.get_stats(repo_names=repos))
 
 
 @api_router.get("/repos", response_model=list[Repository])
-async def get_repos(repos: frozenset[str] = Depends(get_accessible_repos)):
+def get_repos(repos: frozenset[str] = Depends(get_accessible_repos)):
     return [Repository(**r) for r in repo_repo.list_repos(repo_names=repos)]
 
 
 @api_router.get("/repos/{repo_id}/settings", response_model=RepositorySettings)
-async def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_access)):
+def get_repo_settings(repo_id: str, _: AuthUser = Depends(require_repo_id_access)):
     return RepositorySettings(**repo_repo.get_or_create_settings(repo_id))
 
 
 @api_router.patch("/repos/{repo_id}/settings", response_model=RepositorySettings, dependencies=[Depends(verify_csrf_token)])
-async def update_repo_settings(
+def update_repo_settings(
     repo_id: str, settings_update: RepositorySettings, _: AuthUser = Depends(require_repo_id_access)
 ):
     settings_dict = settings_update.model_dump()
@@ -450,14 +450,14 @@ async def get_reviews(
     # page_size -> Supabase .range()) — this route just never exposed it,
     # hardcoding page=1/page_size=1000 and discarding the real `total`
     # count it already returns.
-    items, total = review_repo.list_reviews(
+    items, total = await asyncio.to_thread(review_repo.list_reviews,
         repo_name=repo, status=status, severity=severity, page=page, page_size=page_size, repo_names=repos
     )
     return Paginated(items=[Review(**i) for i in items], page=page, page_size=page_size, total=total)
 
 
 @api_router.get("/repos/{repo_full_name:path}/reviews", response_model=Paginated[Review])
-async def get_repo_reviews(
+def get_repo_reviews(
     repo_full_name: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -468,7 +468,7 @@ async def get_repo_reviews(
 
 
 @api_router.get("/reviews/{review_id}", response_model=ReviewDetail)
-async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
+def get_review_detail(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
     review = review_repo.get_review(review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
@@ -476,7 +476,7 @@ async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review
 
 
 @api_router.get("/hitl/pending", response_model=list[HitlItem])
-async def get_hitl_pending(repos: frozenset[str] = Depends(get_accessible_repos)):
+def get_hitl_pending(repos: frozenset[str] = Depends(get_accessible_repos)):
     pending = review_repo.list_hitl_pending(repo_names=repos)
     # Set (not incremented) from this query's own result each time it's
     # polled — see the metric's own docstring (app/services/metrics.py) for
@@ -516,7 +516,7 @@ def _record_hitl_outcomes(review: dict, repo_full_name: str, review_id: str, out
 
 @api_router.post("/hitl/{review_id}/approve", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
-    review = review_repo.get_review(review_id)
+    review = await asyncio.to_thread(review_repo.get_review, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
@@ -529,7 +529,7 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # time (see github_webhook below), not a hardcoded fallback — a
     # hardcoded id silently posts through whichever installation that id
     # happens to belong to, which may not even have this repo installed.
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if not gh_context or not gh_context.get("repo_full_name") or not gh_context.get("installation_id"):
         raise HTTPException(
             status_code=409,
@@ -550,7 +550,9 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # is one UPDATE ... WHERE status = 'waiting_hitl' RETURNING, so exactly
     # one concurrent approve wins; every other gets 409 and posts nothing.
     reviews = review_repo._db.table(review_repo.TABLE)
-    claimed = reviews.update({"status": "posting"}).eq("id", review_id).eq("status", "waiting_hitl").execute()
+    claimed = await asyncio.to_thread(
+        reviews.update({"status": "posting"}).eq("id", review_id).eq("status", "waiting_hitl").execute
+    )
     if not claimed.data:
         raise HTTPException(status_code=409, detail="Review is not awaiting approval")
 
@@ -561,18 +563,22 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
 
     from app.services.github_client import GitHubClient
 
+    def _client_and_head():
+        client = GitHubClient(installation_id=gh_context["installation_id"])
+        return client, client.get_pr_head_sha(gh_context["repo_full_name"], gh_context["pr_number"])
+
     try:
-        gh = GitHubClient(installation_id=gh_context["installation_id"])
-        current_head = gh.get_pr_head_sha(gh_context["repo_full_name"], gh_context["pr_number"])
+        # PyGithub is synchronous: off the event loop (audit P1-7).
+        gh, current_head = await asyncio.to_thread(_client_and_head)
     except Exception as e:
         logger.exception("Failed to read the PR's current head from GitHub: %s", e)
-        _release_claim()
+        await asyncio.to_thread(_release_claim)
         raise HTTPException(status_code=502, detail="Could not reach GitHub to post the approval")
     # Same rule as the pipeline's "check again before posting" (audit P1-8):
     # the comment is sticky, so approving a review of an older commit would
     # overwrite the newer review's comment.
     if gh_context.get("commit_sha") and current_head and current_head != gh_context["commit_sha"]:
-        review_repo.update_review(review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
         await _reconclude_check_run(review_id, gh_context, "neutral",
                                     check_runs.could_not_finish_title(f"superseded by {current_head}"))
         raise HTTPException(status_code=409, detail=f"This review is superseded by {current_head}; nothing was posted")
@@ -584,7 +590,8 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         logger.info("Posting HITL-approved comment to GitHub", extra={
             "review_id": review_id, "repo_full_name": gh_context["repo_full_name"], "pr_number": gh_context["pr_number"],
         })
-        github_response = gh.upsert_sticky_comment(
+        github_response = await asyncio.to_thread(
+            gh.upsert_sticky_comment,
             repo_full_name=gh_context["repo_full_name"],
             pr_number=gh_context["pr_number"],
             body=gh_context.get("final_comment_markdown") or "Approved by human.",
@@ -592,18 +599,18 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         )
     except Exception as e:
         logger.exception("Failed to post human approval comment to GitHub: %s", e)
-        _release_claim()
+        await asyncio.to_thread(_release_claim)
         raise HTTPException(status_code=502, detail=f"Failed to post approval comment to GitHub: {e}")
 
     logger.info("GitHub comment posted", extra={
         "review_id": review_id, "github_comment_url": github_response.get("html_url"),
     })
-    review_repo.update_review(
+    await asyncio.to_thread(review_repo.update_review,
         review_id, {"status": "completed", "github_comment_preview": github_response.get("html_url")}
     )
     # Only now, after the post succeeded, is this a real approval worth
     # learning from (audit P1-6).
-    _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
+    await asyncio.to_thread(_record_hitl_outcomes, review, gh_context["repo_full_name"], review_id, "approved")
     # The check was left at action_required; it now reflects what was posted.
     conclusion, title = check_runs.posted_outcome(
         review.get("findings") or [], bool((review.get("status_reason") or "").startswith("incomplete")),
@@ -638,21 +645,23 @@ async def _reconclude_check_run(review_id: str, gh_context: dict, conclusion: st
 
 @api_router.post("/hitl/{review_id}/reject", response_model=dict, dependencies=[Depends(verify_csrf_token)])
 async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_access)):
-    review = review_repo.get_review(review_id)
+    review = await asyncio.to_thread(review_repo.get_review, review_id)
     if not review:
         raise HTTPException(status_code=404, detail="Review not found")
 
     # Same compare-and-set as approve (audit P1-6): only a review still
     # awaiting a human can be rejected, and only once.
-    claimed = review_repo._db.table(review_repo.TABLE).update({"status": "rejected"}) \
-        .eq("id", review_id).eq("status", "waiting_hitl").execute()
+    claimed = await asyncio.to_thread(
+        review_repo._db.table(review_repo.TABLE).update({"status": "rejected"})
+        .eq("id", review_id).eq("status", "waiting_hitl").execute
+    )
     if not claimed.data:
         raise HTTPException(status_code=409, detail="Review is not awaiting approval")
-    review_repo.update_review(review_id, {"status": "rejected"})  # stamps completed_at/duration
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "rejected"})  # stamps completed_at/duration
 
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if gh_context and gh_context.get("repo_full_name"):
-        _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "rejected")
+        await asyncio.to_thread(_record_hitl_outcomes, review, gh_context["repo_full_name"], review_id, "rejected")
         await _reconclude_check_run(review_id, gh_context, "neutral", "Review dismissed by a maintainer")
 
     await stream_manager.publish(review_id, {"type": "hitl.rejected", "reviewId": review_id})
@@ -664,12 +673,12 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
 
 
 @api_router.get("/ledger/{repo_full_name:path}/trend", response_model=list[LedgerTrend])
-async def get_ledger_trend(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
+def get_ledger_trend(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return [LedgerTrend(**t) for t in review_repo.get_ledger_trend(repo_full_name)]
 
 
 @api_router.get("/ledger/{repo_full_name:path}", response_model=LedgerStats)
-async def get_ledger_stats(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
+def get_ledger_stats(repo_full_name: str, _: AuthUser = Depends(require_repo_full_name_access)):
     return LedgerStats(**review_repo.get_ledger_stats(repo_full_name))
 
 
@@ -691,7 +700,7 @@ async def stream_review_events(review_id: str, _: AuthUser = Depends(require_rev
     actually firing before this fix — found while rewriting this endpoint
     for Redis, not something this migration introduced.
     """
-    gh_context = review_repo.get_review_github_context(review_id)
+    gh_context = await asyncio.to_thread(review_repo.get_review_github_context, review_id)
     if gh_context and gh_context.get("correlation_id"):
         set_correlation_id(gh_context["correlation_id"])
 

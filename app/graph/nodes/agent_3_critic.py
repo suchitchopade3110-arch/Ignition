@@ -18,6 +18,7 @@ future PRs. Only verified findings are recorded (never raw/unverified
 ones), so the incident corpus can't be poisoned by hallucinated claims
 that were already filtered out earlier in this same function.
 """
+import asyncio
 import logging
 from pathlib import Path
 
@@ -311,7 +312,8 @@ async def agent_3_critic(state: ReviewState) -> dict:
     acs_score = compute_acs(total_deps, total_violations)
 
     ledger = LedgerRepository()
-    baseline = ledger.get_baseline(state.repo_full_name)
+    # Supabase is synchronous: ledger reads run off the event loop (audit P1-7).
+    baseline = await asyncio.to_thread(ledger.get_baseline, state.repo_full_name)
     baseline_acs = baseline["acs_score"] if baseline else None
     regression = is_rule_regression(
         acs_score, baseline_acs, tolerance=get_settings().regression_tolerance
@@ -323,7 +325,7 @@ async def agent_3_critic(state: ReviewState) -> dict:
         regression = False
 
     apply_severity_floors(verified_findings)
-    hitl_severity = _decide_hitl_severity(verified_findings, ledger, state.repo_full_name)
+    hitl_severity = await asyncio.to_thread(_decide_hitl_severity, verified_findings, ledger, state.repo_full_name)
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 

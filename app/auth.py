@@ -22,6 +22,7 @@ signed-in user's own GitHub token can see that repo with write access
 encrypted, in the `sessions` table and never touches the browser. Expiring
 user tokens are refreshed here when they run out; logout revokes them.
 """
+import asyncio
 import json
 import logging
 import secrets
@@ -75,12 +76,12 @@ def _new_session_id() -> str:
 # Defined before the route handlers below since /auth/me depends on
 # get_current_user via FastAPI's Depends().
 
-def _logged_out(session_id: str, reason: str) -> HTTPException:
+async def _logged_out(session_id: str, reason: str) -> HTTPException:
     """Ends a session that can't be used any more and returns the 401 to
     raise. Never a 500: the user just signs in again."""
     logger.info("Ending session: %s", reason)
     try:
-        _auth_repo.delete_session(session_id)
+        await asyncio.to_thread(_auth_repo.delete_session, session_id)
     except Exception:
         logger.warning("Could not delete the unusable session", exc_info=True)
     return HTTPException(status_code=401, detail="Session invalid or expired")
@@ -95,7 +96,7 @@ async def _refresh_user_token(session_id: str, session: dict) -> dict:
     if not session.get("github_refresh_token") or (
         refresh_expires and refresh_expires <= datetime.now(timezone.utc)
     ):
-        raise _logged_out(session_id, "GitHub token expired and cannot be refreshed")
+        raise await _logged_out(session_id, "GitHub token expired and cannot be refreshed")
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.post(
@@ -114,13 +115,13 @@ async def _refresh_user_token(session_id: str, session: dict) -> dict:
         raise HTTPException(status_code=503, detail="Could not refresh your GitHub sign-in; try again")
 
     if not data.get("access_token"):
-        latest = _auth_repo.get_session_with_user(session_id)
+        latest = await asyncio.to_thread(_auth_repo.get_session_with_user, session_id)
         if latest and latest.get("github_token_expires_at") and _token_is_fresh(latest):
             return latest  # another request refreshed it first
-        raise _logged_out(session_id, f"GitHub refused the token refresh ({data.get('error', 'no token')})")
+        raise await _logged_out(session_id, f"GitHub refused the token refresh ({data.get('error', 'no token')})")
 
-    _auth_repo.update_session_tokens(
-        session_id, data["access_token"], data.get("expires_in"),
+    await asyncio.to_thread(
+        _auth_repo.update_session_tokens, session_id, data["access_token"], data.get("expires_in"),
         data.get("refresh_token"), data.get("refresh_token_expires_in"),
     )
     return {**session, "github_access_token": data["access_token"]}
@@ -140,10 +141,11 @@ async def get_current_user(request: Request) -> AuthUser:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     try:
-        session = _auth_repo.get_session_with_user(session_id)
+        # Supabase is synchronous: off the event loop (audit P1-7).
+        session = await asyncio.to_thread(_auth_repo.get_session_with_user, session_id)
     except UndecryptableSession:
         # A plaintext row from before P1-1, or a rotated-out key.
-        raise _logged_out(session_id, "stored token cannot be decrypted")
+        raise await _logged_out(session_id, "stored token cannot be decrypted")
     except Exception:
         logger.exception("Session lookup failed (datastore unreachable?)")
         raise HTTPException(status_code=503, detail="Auth service temporarily unavailable")
@@ -292,7 +294,9 @@ async def require_repo_id_access(
     """Dependency for routes shaped /api/repos/{repo_id}/... where repo_id
     is the short `owner_name` form, not owner/name."""
     try:
-        res = _repo_repo._db.table(_repo_repo.TABLE).select("owner", "name").eq("id", repo_id).execute()
+        res = await asyncio.to_thread(
+            _repo_repo._db.table(_repo_repo.TABLE).select("owner", "name").eq("id", repo_id).execute
+        )
     except Exception:
         logger.exception("Repo lookup failed (datastore unreachable?)")
         raise HTTPException(status_code=503, detail="Datastore temporarily unavailable")
@@ -309,7 +313,9 @@ async def require_review_repo_access(
     """Dependency for routes keyed by review_id — resolves the review's
     owning repo first, then applies the same ownership check."""
     try:
-        res = _review_repo._db.table(_review_repo.TABLE).select("repo_full_name").eq("id", review_id).execute()
+        res = await asyncio.to_thread(
+            _review_repo._db.table(_review_repo.TABLE).select("repo_full_name").eq("id", review_id).execute
+        )
     except Exception:
         logger.exception("Review lookup failed (datastore unreachable?)")
         raise HTTPException(status_code=503, detail="Datastore temporarily unavailable")
@@ -391,7 +397,8 @@ async def github_callback(
             raise HTTPException(status_code=401, detail="Failed to fetch GitHub user profile")
         gh_user = user_res.json()
 
-    user_row = _auth_repo.get_or_create_user(
+    user_row = await asyncio.to_thread(
+        _auth_repo.get_or_create_user,
         github_id=gh_user["id"],
         login=gh_user["login"],
         name=gh_user.get("name"),
@@ -400,7 +407,8 @@ async def github_callback(
 
     session_id = _new_session_id()
     try:
-        _auth_repo.create_session(
+        await asyncio.to_thread(
+            _auth_repo.create_session,
             session_id=session_id,
             user_id=user_row["id"],
             github_access_token=access_token,
@@ -468,12 +476,12 @@ async def logout(request: Request, response: Response):
     session_id = request.cookies.get(settings.session_cookie_name)
     if session_id:
         try:
-            session = _auth_repo.get_session_with_user(session_id)
+            session = await asyncio.to_thread(_auth_repo.get_session_with_user, session_id)
         except Exception:
             session = None  # undecryptable or unreachable: nothing to revoke
         if session:
             await _revoke_github_token(session["github_access_token"])
-        _auth_repo.delete_session(session_id)
+        await asyncio.to_thread(_auth_repo.delete_session, session_id)
     response.delete_cookie(settings.session_cookie_name)
     response.delete_cookie(settings.csrf_cookie_name)
     return {"status": "ok"}

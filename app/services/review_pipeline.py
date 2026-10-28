@@ -67,7 +67,7 @@ async def _cancel_as_superseded(review_id: str, newer_sha: str, check: _CheckRun
     """A newer push made this review's commit stale (audit P1-8): record why
     and close the dashboard's stream; nothing is posted to the PR."""
     status_reason = f"superseded by {newer_sha}"
-    review_repo.update_review(review_id, {"status": "cancelled", "status_reason": status_reason})
+    await asyncio.to_thread(review_repo.update_review, review_id, {"status": "cancelled", "status_reason": status_reason})
     await stream_manager.publish(
         review_id, {"type": "review.failed", "reviewId": review_id, "status": "cancelled"}
     )
@@ -188,18 +188,18 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     # the analyzer or an LLM. Unreadable settings fail closed: the owner
     # may have turned AI review off, so the code is not sent anywhere.
     try:
-        cfg = repo_repo.get_or_create_settings(event.repository.full_name.replace("/", "_"))
+        cfg = await asyncio.to_thread(repo_repo.get_or_create_settings, event.repository.full_name.replace("/", "_"))
     except Exception:
         logger.exception("Could not load repo settings", extra={"review_id": review_id})
         status_reason = "failed: could not load repo settings"
-        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(review_id, {"type": "review.failed", "reviewId": review_id, "status": "failed"})
         _record_terminal_metric("failed")
         await check.could_not_finish(status_reason)
         return
     if not cfg.get("enable_ai_review", True):
         logger.info("AI review disabled for this repo", extra={"review_id": review_id})
-        review_repo.update_review(
+        await asyncio.to_thread(review_repo.update_review,
             review_id, {"status": "completed", "status_reason": "AI review disabled for this repo"}
         )
         await stream_manager.publish(
@@ -222,14 +222,15 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     gh = None
     current_head = None
 
-    try:
+    def _fetch_pr():
         from app.services.github_client import GitHubClient
-        gh = GitHubClient(installation_id=event.installation.id)
-        pr = gh._client.get_repo(event.repository.full_name).get_pull(event.pull_request.number)
-        title = pr.title
-        author = pr.user.login
-        branch = pr.head.ref
-        current_head = pr.head.sha
+        client = GitHubClient(installation_id=event.installation.id)
+        pr = client._client.get_repo(event.repository.full_name).get_pull(event.pull_request.number)
+        return client, pr.title, pr.user.login, pr.head.ref, pr.head.sha
+
+    try:
+        # PyGithub is synchronous: off the event loop (audit P1-7).
+        gh, title, author, branch, current_head = await asyncio.to_thread(_fetch_pr)
     except Exception as e:
         logger.exception("Failed to fetch PR info from GitHub API: %s", e)
 
@@ -247,7 +248,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
 
     if gh:
         try:
-            diff_text = gh.get_pr_diff(event.repository.full_name, event.pull_request.number)
+            diff_text = await asyncio.to_thread(gh.get_pr_diff, event.repository.full_name, event.pull_request.number)
             _, _, _, parsed_diffs = parse_diff(diff_text)
         except Exception as e:
             logger.exception("Failed to fetch PR diff: %s", e)
@@ -258,14 +259,14 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     # (the regression flag can't fire then).
     previous_acs_score = 100.0
     try:
-        baseline = LedgerRepository().get_baseline(event.repository.full_name)
+        baseline = await asyncio.to_thread(LedgerRepository().get_baseline, event.repository.full_name)
         if baseline:
             previous_acs_score = float(baseline["acs_score"])
     except Exception as e:
         logger.warning("Could not read the regression baseline: %s", e)
 
     # Save initial metadata
-    review_repo.update_review(
+    await asyncio.to_thread(review_repo.update_review,
         review_id,
         {
             "status": "running",
@@ -334,7 +335,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     if not enable_auto_fix:
         del agents_progress["agent_4_autofix"]
 
-    review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+    await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
     await stream_manager.publish(
         review_id,
         {
@@ -383,7 +384,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                         agents_progress["agent_1_gate"]["status"] = "completed"
                         agents_progress["agent_1_gate"]["findingCount"] = 1 if violation else 0
 
-                        review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -411,7 +412,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                                 await stream_manager.publish(
                                     review_id, {"type": "critic.started", "reviewId": review_id}
                                 )
-                            review_repo.update_review(
+                            await asyncio.to_thread(review_repo.update_review,
                                 review_id, {"agents": list(agents_progress.values())}
                             )
 
@@ -420,7 +421,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                         agents_progress[node_name]["status"] = "completed"
                         agents_progress[node_name]["findingCount"] = len(findings)
 
-                        review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -437,7 +438,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             and agents_progress["agent_3_critic"]["status"] == "pending"
                         ):
                             agents_progress["agent_3_critic"]["status"] = "running"
-                            review_repo.update_review(
+                            await asyncio.to_thread(review_repo.update_review,
                                 review_id, {"agents": list(agents_progress.values())}
                             )
                             await stream_manager.publish(
@@ -491,7 +492,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             else None,
                         }
 
-                        review_repo.update_review(
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
                                 "agents": list(agents_progress.values()),
@@ -548,7 +549,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             agents_progress["agent_2a_struct"]["findingCount"] = 0
                             agents_progress["agent_3_critic"]["status"] = "pending"
                             agents_progress["agent_3_critic"]["findingCount"] = 0
-                            review_repo.update_review(review_id, {"agents": list(agents_progress.values())})
+                            await asyncio.to_thread(review_repo.update_review, review_id, {"agents": list(agents_progress.values())})
                             await stream_manager.publish(
                                 review_id,
                                 {
@@ -559,7 +560,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             )
 
                     elif node_name == "pause_for_human_approval":
-                        review_repo.update_review(review_id, {"status": "waiting_hitl"})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "waiting_hitl"})
                         await stream_manager.publish(
                             review_id,
                             {
@@ -593,7 +594,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                         failed = node_output.get("autofix_failed", 0)
                         agents_progress["agent_4_autofix"]["findingCount"] = posted
 
-                        review_repo.update_review(
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
                                 "agents": list(agents_progress.values()),
@@ -617,15 +618,15 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             await _cancel_as_superseded(review_id, superseded_by, check)
                             _record_terminal_metric("cancelled")
                             continue
-                        review_repo.update_review(review_id, {"status": "completed"})
+                        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "completed"})
                         conclusion, title = check_runs.posted_outcome(outcome["findings"], outcome["incomplete"])
-                        db_comment = (review_repo.get_review(review_id) or {}).get("final_comment_markdown")
+                        db_comment = (await asyncio.to_thread(review_repo.get_review, review_id) or {}).get("final_comment_markdown")
                         await check.conclude(conclusion, title, summary=db_comment or title)
 
                         # Update Repository baseline stats
-                        db_rev = review_repo.get_review(review_id)
+                        db_rev = await asyncio.to_thread(review_repo.get_review, review_id)
                         final_acs = db_rev.get("acs_score") if db_rev else 100.0
-                        repo_repo.update_repo_stats(
+                        await asyncio.to_thread(repo_repo.update_repo_stats,
                             repo_full_name=event.repository.full_name,
                             acs_score=final_acs,
                             last_review_at=datetime.utcnow().isoformat() + "Z",
@@ -649,7 +650,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
                             continue
                         # Posted on the PR by the node (sticky comment) and
                         # recorded as "rejected", not "completed" (audit P0-6).
-                        review_repo.update_review(
+                        await asyncio.to_thread(review_repo.update_review,
                             review_id,
                             {
                                 "status": "rejected",
@@ -688,7 +689,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
             status_reason = (
                 f"timed out — exceeded review_latency_budget_seconds ({settings.review_latency_budget_seconds}s)"
             )
-            review_repo.update_review(
+            await asyncio.to_thread(review_repo.update_review,
                 review_id,
                 {
                     "status": "waiting_hitl",
@@ -721,7 +722,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
         # Arq's own shutdown bookkeeping.
         logger.warning("Review %s cancelled — shutdown drain timeout exceeded", review_id)
         status_reason = "interrupted — graceful shutdown drain timeout exceeded"
-        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
@@ -736,7 +737,7 @@ async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _Ch
     except Exception as exc:
         logger.exception("LangGraph execution failed: %s", exc)
         status_reason = f"failed: {type(exc).__name__}"
-        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
+        await asyncio.to_thread(review_repo.update_review, review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
