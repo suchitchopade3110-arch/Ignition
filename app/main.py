@@ -64,6 +64,7 @@ from app.services.logging_config import configure_logging, set_correlation_id
 from app.services.health_checks import run_health_checks
 from app.services.llm_client import get_llm_client
 from app.services.schema_check import require_tables_or_exit
+from app.services import check_runs
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -346,6 +347,18 @@ async def github_webhook(request: Request, _: None = Depends(verify_github_signa
             }
         raise
 
+    # The "Ignition" check run (audit P0-6), created now so the PR shows a
+    # queued check straight away. A GitHub hiccup here must never drop the
+    # webhook: the job creates the check run itself if this didn't.
+    try:
+        check_run_id = await asyncio.to_thread(
+            check_runs.create_check_run_sync,
+            event.installation.id, event.repository.full_name, event.pull_request.head_sha,
+        )
+        review_repo.update_review(review_id, {"check_run_id": check_run_id})
+    except Exception:
+        logger.exception("Could not create the GitHub check run", extra={"review_id": review_id})
+
     # Dispatch the review as an Arq job instead of an in-process
     # asyncio.create_task — this is what lets it survive this FastAPI
     # process restarting, and run on a worker process that isn't even this
@@ -546,6 +559,8 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # overwrite the newer review's comment.
     if gh_context.get("commit_sha") and current_head and current_head != gh_context["commit_sha"]:
         review_repo.update_review(review_id, {"status": "cancelled", "status_reason": f"superseded by {current_head}"})
+        await _reconclude_check_run(review_id, gh_context, "neutral",
+                                    check_runs.could_not_finish_title(f"superseded by {current_head}"))
         raise HTTPException(status_code=409, detail=f"This review is superseded by {current_head}; nothing was posted")
 
     # Post through the sticky comment (audit P1-8), so even a retried post
@@ -575,6 +590,11 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
     # Only now, after the post succeeded, is this a real approval worth
     # learning from (audit P1-6).
     _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "approved")
+    # The check was left at action_required; it now reflects what was posted.
+    conclusion, title = check_runs.posted_outcome(
+        review.get("findings") or [], bool((review.get("status_reason") or "").startswith("incomplete")),
+    )
+    await _reconclude_check_run(review_id, gh_context, conclusion, title, gh_context.get("final_comment_markdown"))
 
     # Publish hitl.approved and completed events
     await stream_manager.publish(review_id, {"type": "hitl.approved", "reviewId": review_id})
@@ -587,6 +607,19 @@ async def approve_hitl(review_id: str, _: AuthUser = Depends(require_review_repo
         "github_comment_url": github_response.get("html_url"),
         "github_comment_id": github_response.get("id"),
     }
+
+
+async def _reconclude_check_run(review_id: str, gh_context: dict, conclusion: str, title: str,
+                                summary: str | None = None) -> None:
+    """Moves a paused review's check off action_required once a human has
+    decided (audit P0-6). Best-effort: the decision already stands."""
+    if not gh_context.get("installation_id") or not gh_context.get("commit_sha"):
+        return
+    await check_runs.conclude_check_run(
+        reviews=review_repo, review_id=review_id, installation_id=gh_context["installation_id"],
+        repo=gh_context["repo_full_name"], head_sha=gh_context["commit_sha"],
+        conclusion=conclusion, title=title, summary=summary or title,
+    )
 
 
 @api_router.post("/hitl/{review_id}/reject", response_model=dict, dependencies=[Depends(verify_csrf_token)])
@@ -606,6 +639,7 @@ async def reject_hitl(review_id: str, _: AuthUser = Depends(require_review_repo_
     gh_context = review_repo.get_review_github_context(review_id)
     if gh_context and gh_context.get("repo_full_name"):
         _record_hitl_outcomes(review, gh_context["repo_full_name"], review_id, "rejected")
+        await _reconclude_check_run(review_id, gh_context, "neutral", "Review dismissed by a maintainer")
 
     await stream_manager.publish(review_id, {"type": "hitl.rejected", "reviewId": review_id})
     await stream_manager.publish(

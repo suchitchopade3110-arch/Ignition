@@ -34,3 +34,7 @@ def test_review_status_gains_posting_and_rejected():
     sql = _sql(15)
     assert "ALTER TYPE review_status ADD VALUE IF NOT EXISTS 'posting';" in sql
     assert "ALTER TYPE review_status ADD VALUE IF NOT EXISTS 'rejected';" in sql
+
+
+def test_reviews_gain_a_check_run_id():
+    assert "ALTER TABLE reviews ADD COLUMN IF NOT EXISTS check_run_id BIGINT;" in _sql(16)

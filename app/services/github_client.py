@@ -126,6 +126,17 @@ class GitHubClient:
         })
         return created.raw_data
 
+    def create_check_run(self, repo: str, head_sha: str) -> int:
+        """The "Ignition" check run for this head commit (audit P0-6)."""
+        return self._client.get_repo(repo).create_check_run(name="Ignition", head_sha=head_sha, status="queued").id
+
+    def complete_check_run(self, repo: str, check_run_id: int, conclusion: str, title: str, summary: str,
+                           details_url: str | None = None) -> None:
+        run = self._client.get_repo(repo).get_check_run(check_run_id)
+        kwargs = {"details_url": details_url} if details_url else {}
+        run.edit(status="completed", conclusion=conclusion,
+                 output={"title": title[:255], "summary": summary[:65000]}, **kwargs)
+
     @staticmethod
     def _build_github(token: str):
         from github import Github

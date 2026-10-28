@@ -21,6 +21,7 @@ from app.schemas.github import PullRequestWebhook
 from app.services.ast_client import ASTClient
 from app.services.stream_manager import stream_manager
 from app.services import metrics
+from app.services import check_runs
 from app.graph.workflow import build_graph
 from app.graph.state import ReviewState
 from app.repositories.dashboard import ReviewRepository, RepoRepository
@@ -36,15 +37,40 @@ review_repo = ReviewRepository()
 repo_repo = RepoRepository()
 
 
-async def _cancel_as_superseded(review_id: str, newer_sha: str) -> None:
+class _CheckRun:
+    """The review's "Ignition" check run (audit P0-6). Every exit of
+    run_review_job concludes it exactly once; run_review_job's finally
+    concludes it as a fallback if an exit path somehow didn't."""
+
+    def __init__(self, event: PullRequestWebhook, review_id: str):
+        self._event = event
+        self._review_id = review_id
+        self.concluded = False
+
+    async def conclude(self, conclusion: str, title: str, summary: str | None = None,
+                       details_url: str | None = None) -> None:
+        self.concluded = True
+        await check_runs.conclude_check_run(
+            reviews=review_repo, review_id=self._review_id,
+            installation_id=self._event.installation.id,
+            repo=self._event.repository.full_name,
+            head_sha=self._event.pull_request.head_sha,
+            conclusion=conclusion, title=title, summary=summary or title, details_url=details_url,
+        )
+
+    async def could_not_finish(self, status_reason: str) -> None:
+        await self.conclude("neutral", check_runs.could_not_finish_title(status_reason))
+
+
+async def _cancel_as_superseded(review_id: str, newer_sha: str, check: _CheckRun) -> None:
     """A newer push made this review's commit stale (audit P1-8): record why
     and close the dashboard's stream; nothing is posted to the PR."""
-    review_repo.update_review(
-        review_id, {"status": "cancelled", "status_reason": f"superseded by {newer_sha}"}
-    )
+    status_reason = f"superseded by {newer_sha}"
+    review_repo.update_review(review_id, {"status": "cancelled", "status_reason": status_reason})
     await stream_manager.publish(
         review_id, {"type": "review.failed", "reviewId": review_id, "status": "cancelled"}
     )
+    await check.could_not_finish(status_reason)
 
 
 def parse_diff(diff_text: str) -> tuple[int, int, int, list[dict]]:
@@ -131,6 +157,21 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     """
     set_correlation_id(correlation_id)
     event = PullRequestWebhook.model_validate(event_payload)
+    check = _CheckRun(event, review_id)
+    exit_reason = "unexpected exit"
+    try:
+        await _review_job_body(event, review_id, check)
+    except BaseException as exc:
+        exit_reason = f"failed: {type(exc).__name__}"
+        raise
+    finally:
+        # Fallback only: every exit inside the body concludes the check
+        # itself. This catches anything that escapes them (audit P0-6).
+        if not check.concluded:
+            await check.could_not_finish(exit_reason)
+
+
+async def _review_job_body(event: PullRequestWebhook, review_id: str, check: _CheckRun) -> None:
     logger.info("Starting background review", extra={"review_id": review_id})
     _job_start_time = time.monotonic()
 
@@ -164,7 +205,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
     # analyse a stale SHA. The newer push has its own job.
     if current_head and current_head != event.pull_request.head_sha:
         logger.info("Review superseded before analysis", extra={"review_id": review_id})
-        await _cancel_as_superseded(review_id, current_head)
+        await _cancel_as_superseded(review_id, current_head, check)
         _record_terminal_metric("cancelled")
         return
 
@@ -270,6 +311,9 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         },
     )
 
+    # What the check run's conclusion is built from (audit P0-6).
+    outcome: dict = {"findings": [], "incomplete": False, "rejection_reason": None}
+
     try:
         # 2. Build Graph State
         ast_payload = await ast_client.analyze_git(
@@ -299,6 +343,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         # workflow.py), so there's no re-entry case to
                         # detect here any more.
                         violation = node_output.get("hard_rule_violation", False)
+                        outcome["rejection_reason"] = node_output.get("rejection_reason")
                         agents_progress["agent_1_gate"]["status"] = "completed"
                         agents_progress["agent_1_gate"]["findingCount"] = 1 if violation else 0
 
@@ -392,6 +437,9 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                                 "verificationTier": f.verification_tier,
                                 "patternKey": f.pattern_key,
                             })
+
+                        outcome["findings"] = mapped_findings
+                        outcome["incomplete"] = review_incomplete
 
                         regression_alert = {
                             "isRegression": is_regression,
@@ -491,6 +539,11 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         # however long the review sat waiting on a human,
                         # which isn't graph execution time.
                         _record_terminal_metric("waiting_hitl")
+                        await check.conclude(
+                            "action_required", "Waiting for human review",
+                            summary="A finding needs a maintainer's approval before Ignition posts its review.",
+                            details_url=f"{settings.frontend_base_url}/reviews/{review_id}",
+                        )
 
                     elif node_name == "agent_4_autofix":
                         agents_progress["agent_4_autofix"]["status"] = "completed"
@@ -522,10 +575,13 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                     elif node_name == "finalize_and_post":
                         superseded_by = (node_output or {}).get("superseded_by")
                         if superseded_by:
-                            await _cancel_as_superseded(review_id, superseded_by)
+                            await _cancel_as_superseded(review_id, superseded_by, check)
                             _record_terminal_metric("cancelled")
                             continue
                         review_repo.update_review(review_id, {"status": "completed"})
+                        conclusion, title = check_runs.posted_outcome(outcome["findings"], outcome["incomplete"])
+                        db_comment = (review_repo.get_review(review_id) or {}).get("final_comment_markdown")
+                        await check.conclude(conclusion, title, summary=db_comment or title)
 
                         # Update Repository baseline stats
                         db_rev = review_repo.get_review(review_id)
@@ -547,10 +603,17 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                         _record_terminal_metric("completed")
 
                     elif node_name == "direct_rejection":
+                        node_output = node_output or {}
+                        if node_output.get("superseded_by"):
+                            await _cancel_as_superseded(review_id, node_output["superseded_by"], check)
+                            _record_terminal_metric("cancelled")
+                            continue
+                        # Posted on the PR by the node (sticky comment) and
+                        # recorded as "rejected", not "completed" (audit P0-6).
                         review_repo.update_review(
                             review_id,
                             {
-                                "status": "completed",  # or rejected
+                                "status": "rejected",
                                 "final_comment_markdown": node_output.get("final_comment_markdown"),
                             },
                         )
@@ -559,10 +622,14 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                             {
                                 "type": "review.completed",
                                 "reviewId": review_id,
-                                "status": "completed",
+                                "status": "rejected",
                             },
                         )
-                        _record_terminal_metric("completed")
+                        _record_terminal_metric("rejected")
+                        await check.conclude(
+                            "failure", f"Hard rule violated: {outcome['rejection_reason']}",
+                            summary=node_output.get("final_comment_markdown"),
+                        )
 
         try:
             await asyncio.wait_for(_stream_graph(), timeout=settings.review_latency_budget_seconds)
@@ -579,13 +646,16 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                 "Review %s exceeded latency budget (%ds) — flagging for human review",
                 review_id, settings.review_latency_budget_seconds,
             )
+            status_reason = (
+                f"timed out — exceeded review_latency_budget_seconds ({settings.review_latency_budget_seconds}s)"
+            )
             review_repo.update_review(
                 review_id,
                 {
                     "status": "waiting_hitl",
                     "hitl_severity": "critical",
                     "severity": "critical",
-                    "status_reason": f"timed out — exceeded review_latency_budget_seconds ({settings.review_latency_budget_seconds}s)",
+                    "status_reason": status_reason,
                 },
             )
             await stream_manager.publish(
@@ -597,6 +667,7 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
                 },
             )
             _record_terminal_metric("timed_out")
+            await check.could_not_finish(status_reason)
             return
 
     except asyncio.CancelledError:
@@ -610,13 +681,8 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
         # shutdown. Must re-raise — swallowing CancelledError would break
         # Arq's own shutdown bookkeeping.
         logger.warning("Review %s cancelled — shutdown drain timeout exceeded", review_id)
-        review_repo.update_review(
-            review_id,
-            {
-                "status": "failed",
-                "status_reason": "interrupted — graceful shutdown drain timeout exceeded",
-            },
-        )
+        status_reason = "interrupted — graceful shutdown drain timeout exceeded"
+        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
@@ -626,10 +692,12 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             },
         )
         _record_terminal_metric("cancelled")
+        await check.could_not_finish(status_reason)
         raise
     except Exception as exc:
         logger.exception("LangGraph execution failed: %s", exc)
-        review_repo.update_review(review_id, {"status": "failed"})
+        status_reason = f"failed: {type(exc).__name__}"
+        review_repo.update_review(review_id, {"status": "failed", "status_reason": status_reason})
         await stream_manager.publish(
             review_id,
             {
@@ -639,3 +707,4 @@ async def run_review_job(ctx: dict, event_payload: dict, review_id: str, correla
             },
         )
         _record_terminal_metric("failed")
+        await check.could_not_finish(status_reason)

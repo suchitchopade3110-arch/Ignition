@@ -67,6 +67,12 @@ class ReviewRepository:
         )
         return res.data[0] if res.data else None
 
+    def get_check_run_id(self, review_id: str) -> int | None:
+        """The review's GitHub check run (audit P0-6), or None if the webhook
+        couldn't create one."""
+        res = self._db.table(self.TABLE).select("check_run_id").eq("id", review_id).execute()
+        return res.data[0].get("check_run_id") if res.data else None
+
     def update_review(self, review_id: str, updates: dict) -> dict:
         # If status changes to completed/failed, set completed_at
         if "status" in updates and updates["status"] in ("completed", "failed", "rejected", "cancelled", "posting"):

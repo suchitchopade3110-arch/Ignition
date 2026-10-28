@@ -117,6 +117,9 @@ class FakeReviewRepo:
                 return {"id": row["id"], "correlation_id": row.get("correlation_id")}
         return None
 
+    def get_check_run_id(self, review_id):
+        return (self.rows.get(review_id) or {}).get("check_run_id")
+
     def get_review_github_context(self, review_id):
         row = self.rows.get(review_id)
         if not row:
@@ -196,8 +199,8 @@ def fake_repos(monkeypatch):
     # both app.main and app.services.review_pipeline (same objects) —
     # patching their bound methods here affects both call paths at once.
     for name in ("create_review", "update_review", "get_review",
-                 "get_review_by_repo_pr_sha", "get_review_github_context"):
-        monkeypatch.setattr(review_repo, name, getattr(fake_review_repo, name))
+                 "get_review_by_repo_pr_sha", "get_review_github_context", "get_check_run_id"):
+        monkeypatch.setattr(review_repo, name, getattr(fake_review_repo, name), raising=False)
     for name in ("get_or_create_repo", "update_repo_stats"):
         monkeypatch.setattr(repo_repo, name, getattr(fake_repo_repo, name))
     # The one call site that touches review_repo._db directly (the
@@ -222,6 +225,7 @@ def mock_externals():
             "id": 555111, "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-555111",
         }
         mock_gh_instance.bot_login = "ignition-review[bot]"
+        mock_gh_instance.create_check_run.return_value = 4242  # audit P0-6
         # The PR's current head is the event's head (no newer push) unless a
         # test says otherwise (audit P1-8 superseded-SHA checks).
         mock_gh_instance.get_pr_head_sha.return_value = "deadbeef00000000000000000000000000000000"

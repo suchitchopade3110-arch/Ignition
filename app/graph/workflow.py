@@ -22,7 +22,21 @@ logger = logging.getLogger(__name__)
 
 
 def direct_rejection(state: ReviewState) -> dict:
-    return {"final_comment_markdown": f"Rejected: {state.rejection_reason}"}
+    """Posts the rejection on the PR through the sticky comment (audit P0-6);
+    it used to be stored on the dashboard only, so a hard-rule rejection
+    never reached the PR."""
+    from app.services.github_client import GitHubClient
+
+    markdown = f"## Ignition Review — rejected\n\n**Hard rule violated:** {state.rejection_reason}"
+    gh = GitHubClient(installation_id=state.installation_id)
+    if state.head_sha:  # same "check again before posting" rule as finalize_and_post (P1-8)
+        current_head = gh.get_pr_head_sha(state.repo_full_name, state.pr_number)
+        if current_head and current_head != state.head_sha:
+            return {"superseded_by": current_head, "final_comment_markdown": markdown}
+    gh.upsert_sticky_comment(
+        repo_full_name=state.repo_full_name, pr_number=state.pr_number, body=markdown, bot_login=gh.bot_login,
+    )
+    return {"final_comment_markdown": markdown}
 
 
 def pause_for_human_approval(state: ReviewState) -> dict:
