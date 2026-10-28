@@ -88,7 +88,11 @@ services:
         sync: false
       - key: LLM_API_KEY
         sync: false
+      # openai/gpt-oss-120b (qwen/qwen3-32b was shut down by Groq).
       - key: LLM_MODEL_NAME
+        sync: false
+      # gpt-oss takes low|medium|high (never "none"); set low. Blank omits it.
+      - key: LLM_REASONING_EFFORT
         sync: false
       - key: SUPABASE_URL
         sync: false

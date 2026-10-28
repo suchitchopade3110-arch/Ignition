@@ -21,3 +21,15 @@ def test_deploy_guide_names_the_latest_migration():
 def test_deploy_guide_does_not_suggest_the_shut_down_model():
     assert "qwen/qwen3-32b" not in GUIDE
     assert "openai/gpt-oss-120b" in GUIDE and "LLM_REASONING_EFFORT" in GUIDE
+
+
+def test_every_llm_service_in_the_blueprint_declares_model_and_reasoning_effort():
+    import yaml
+
+    blueprint = yaml.safe_load((REPO_ROOT / "render.yaml").read_text())
+    llm_services = [s for s in blueprint["services"]
+                    if any(e.get("key") == "LLM_API_KEY" for e in s.get("envVars", []))]
+    assert llm_services, "no service in render.yaml declares LLM_API_KEY"
+    for service in llm_services:
+        keys = {e.get("key") for e in service.get("envVars", [])}
+        assert {"LLM_MODEL_NAME", "LLM_REASONING_EFFORT"} <= keys, service["name"]
