@@ -407,13 +407,12 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
       scope,
     );
 
-    const [basePackages, headPackages, boundarySpecYaml] = prepared.gitDir
+    const [packages, boundarySpecYaml] = prepared.gitDir
       ? await Promise.all([
-          getPackageJsonAtRef(prepared.gitDir, args.baseRef, args.authToken),
-          getPackageJsonAtRef(prepared.gitDir, headSha, args.authToken),
+          changedPackages(prepared.gitDir, args.baseRef, headSha, args.authToken),
           getBoundarySpecAtRef(prepared.gitDir, args.baseRef, args.authToken),
         ])
-      : [null, null, null];
+      : [[], null];
 
     return {
       repo_full_name: args.repoFullName,
@@ -422,7 +421,7 @@ export async function analyzePullRequest(args: AnalyzeArgs): Promise<ASTAnalyzer
       symbols,
       dependency_graph: dependencyGraph,
       hard_rule_violations: hardRuleViolations,
-      changed_packages: diffPackages(basePackages, headPackages),
+      changed_packages: packages,
       boundary_spec_yaml: boundarySpecYaml,
     };
   } finally {
@@ -451,25 +450,110 @@ export async function getBoundarySpecAtRef(gitDir: string, ref: string, token?: 
   return git(["show", object], gitDir, token);
 }
 
-/**
- * Extracts a flat name->version map from package.json at a given git ref,
- * without checking out that ref (uses `git show` directly against the
- * already-cloned repo's history). Returns null if the ref/file doesn't
- * exist — a repo might not have a package.json, or the base ref might
- * predate one being added.
- */
-async function getPackageJsonAtRef(
-  gitDir: string,
-  ref: string,
-  token?: string
-): Promise<Record<string, string> | null> {
+/** A file's content at `ref`, read from history without a checkout; null
+ * when it doesn't exist there (a new manifest has no base version). */
+async function fileAtRef(gitDir: string, ref: string, file: string, token?: string): Promise<string | null> {
   try {
-    const output = await git(["show", `${ref}:package.json`], gitDir, token);
-    const pkg = JSON.parse(output);
+    return await git(["show", `${ref}:${file}`], gitDir, token);
+  } catch {
+    return null;
+  }
+}
+
+/** dependencies + devDependencies of a package.json, or null if unreadable. */
+function manifestDependencies(text: string | null): Record<string, string> | null {
+  if (text === null) return null;
+  try {
+    const pkg = JSON.parse(text);
     return { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolved versions from a package-lock.json v2/v3 `packages` map (P2
+ * package diffing): name -> every version installed anywhere in the tree,
+ * so transitive and nested packages count. The root ("") and workspace
+ * entries aren't under node_modules/ and are skipped, as are links. A v1
+ * lockfile (no `packages`) or invalid JSON yields an empty map.
+ */
+export function lockfilePackages(text: string | null): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  if (text === null) return out;
+  let lock: any;
+  try {
+    lock = JSON.parse(text);
+  } catch {
+    return out;
+  }
+  for (const [key, entry] of Object.entries<any>(lock?.packages ?? {})) {
+    const at = key.lastIndexOf("node_modules/");
+    if (at === -1 || !entry || entry.link || typeof entry.version !== "string") continue;
+    const name = key.slice(at + "node_modules/".length);
+    if (!out.has(name)) out.set(name, new Set());
+    out.get(name)!.add(entry.version);
+  }
+  return out;
+}
+
+/** Packages at a version the base lockfile didn't have. A package that had
+ * other versions at base is a bump (previous_version); one it didn't have
+ * at all is new. */
+export function diffLockfiles(
+  base: Map<string, Set<string>> | null,
+  head: Map<string, Set<string>>,
+): PackageRef[] {
+  const changed: PackageRef[] = [];
+  for (const [name, versions] of head) {
+    const before = base?.get(name);
+    for (const version of versions) {
+      if (before?.has(version)) continue;
+      const ref: PackageRef = { name, version };
+      if (before && before.size) ref.previous_version = [...before].sort().at(-1)!;
+      changed.push(ref);
+    }
+  }
+  return changed;
+}
+
+const MANIFEST = /(^|\/)package\.json$/;
+const LOCKFILE = /(^|\/)package-lock\.json$/;
+
+/**
+ * Every dependency the PR adds or changes (P2 package diffing): each
+ * changed package.json (any directory, for monorepos) by declared range,
+ * and each changed package-lock.json by resolved version, including
+ * transitive packages. Files under node_modules/ are ignored. When a
+ * lockfile covers a package, its resolved versions replace the
+ * package.json range for that name.
+ */
+export async function changedPackages(gitDir: string, baseSha: string, headSha: string, token?: string): Promise<PackageRef[]> {
+  const names = await git(["diff", "--name-only", "--diff-filter=ACMR", `${baseSha}...${headSha}`], gitDir, token);
+  const files = names.split("\n").map((s) => s.trim()).filter((s) => s && !s.split("/").includes("node_modules"));
+
+  const fromManifests: PackageRef[] = [];
+  const fromLockfiles: PackageRef[] = [];
+  await Promise.all(files.map(async (file) => {
+    if (MANIFEST.test(file)) {
+      const [base, head] = await Promise.all([fileAtRef(gitDir, baseSha, file, token), fileAtRef(gitDir, headSha, file, token)]);
+      fromManifests.push(...diffPackages(manifestDependencies(base), manifestDependencies(head)));
+    } else if (LOCKFILE.test(file)) {
+      const [base, head] = await Promise.all([fileAtRef(gitDir, baseSha, file, token), fileAtRef(gitDir, headSha, file, token)]);
+      fromLockfiles.push(...diffLockfiles(base === null ? null : lockfilePackages(base), lockfilePackages(head)));
+    }
+  }));
+
+  const resolved = new Set(fromLockfiles.map((p) => p.name));
+  const seen = new Set<string>();
+  const out: PackageRef[] = [];
+  for (const ref of [...fromLockfiles, ...fromManifests.filter((p) => !resolved.has(p.name))]) {
+    const key = `${ref.name}@${ref.version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(ref);
+  }
+  return out;
 }
 
 /**
