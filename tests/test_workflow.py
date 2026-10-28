@@ -40,7 +40,7 @@ def _initial_state() -> ReviewState:
 def _patch_critic_dependencies(monkeypatch):
     monkeypatch.setattr(
         "app.graph.nodes.agent_3_critic.LedgerRepository",
-        lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key: 0),
+        lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key, repo_full_name: 0),
     )
     monkeypatch.setattr(
         "app.graph.nodes.agent_3_critic.VectorStore",

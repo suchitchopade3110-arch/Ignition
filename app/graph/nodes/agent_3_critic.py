@@ -167,7 +167,7 @@ def _demoted_severity(severity: str, consecutive_rejections: int, threshold: int
     return SEVERITY_ORDER[max(0, idx - 1)]
 
 
-def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository) -> str:
+def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerRepository, repo_full_name: str) -> str:
     """
     Structured severity enum — the ONLY thing that drives the HITL gate.
 
@@ -183,7 +183,7 @@ def _decide_hitl_severity(verified_findings: list[Finding], ledger: LedgerReposi
     for f in verified_findings:
         severity = f.severity
         if f.pattern_key:
-            rejections = ledger.get_consecutive_rejections(f.pattern_key)
+            rejections = ledger.get_consecutive_rejections(f.pattern_key, repo_full_name)
             severity = _demoted_severity(severity, rejections, threshold)
         severities.append(severity)
     if "critical" in severities:
@@ -292,7 +292,7 @@ async def agent_3_critic(state: ReviewState) -> dict:
         acs_score = None
         regression = False
 
-    hitl_severity = _decide_hitl_severity(verified_findings, ledger)
+    hitl_severity = _decide_hitl_severity(verified_findings, ledger, state.repo_full_name)
     if regression:
         hitl_severity = "critical"  # a regression always reaches a human, never silently auto-posted
 

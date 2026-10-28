@@ -23,3 +23,8 @@ def test_rls_migration_enables_rls_on_every_public_table_and_revokes_anon():
     assert ("REVOKE EXECUTE ON FUNCTION match_incident_embeddings(vector, text, int) "
             "FROM anon, authenticated, public;") in sql
     assert "CREATE POLICY" not in sql.upper()  # service_role bypasses RLS; no policies by design
+
+
+def test_hitl_outcomes_index_matches_the_repo_scoped_rejection_query():
+    sql = _sql(14)
+    assert "ON hitl_finding_outcomes (repo_full_name, pattern_key, created_at DESC)" in sql

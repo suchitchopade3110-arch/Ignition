@@ -42,6 +42,7 @@ from app.auth import (
     require_repo_id_access,
     require_review_repo_access,
     check_repo_access,
+    get_accessible_repos,
     AuthUser,
 )
 
@@ -369,13 +370,13 @@ api_router = APIRouter(prefix="/api", dependencies=[Depends(get_current_user)])
 
 
 @api_router.get("/stats", response_model=DashboardStats)
-async def get_stats():
-    return DashboardStats(**review_repo.get_stats())
+async def get_stats(repos: frozenset[str] = Depends(get_accessible_repos)):
+    return DashboardStats(**review_repo.get_stats(repo_names=repos))
 
 
 @api_router.get("/repos", response_model=list[Repository])
-async def get_repos():
-    return [Repository(**r) for r in repo_repo.list_repos()]
+async def get_repos(repos: frozenset[str] = Depends(get_accessible_repos)):
+    return [Repository(**r) for r in repo_repo.list_repos(repo_names=repos)]
 
 
 @api_router.get("/repos/{repo_id}/settings", response_model=RepositorySettings)
@@ -400,20 +401,20 @@ async def get_reviews(
     page_size: int = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     user: AuthUser = Depends(get_current_user),
     request: Request = None,
+    repos: frozenset[str] = Depends(get_accessible_repos),
 ):
-    # `repo` is an optional query filter here (unlike the path-scoped routes
-    # below), so ownership is only checked when a specific repo is asked for.
-    # With no filter this returns the caller's own cross-repo review history
-    # from `list_reviews` — login is required, but it is not further scoped
-    # per-repo since there is no single repo to check against.
+    # Scoped to the caller's own repos (audit P0-4): with ?repo=, that one
+    # repo after an access check; without it, every repo the caller can push
+    # to. Never every tenant's reviews.
     if repo:
         await check_repo_access(request, repo)
+        repos = frozenset({repo})
     # list_reviews already implemented real offset pagination (page/
     # page_size -> Supabase .range()) — this route just never exposed it,
     # hardcoding page=1/page_size=1000 and discarding the real `total`
     # count it already returns.
     items, total = review_repo.list_reviews(
-        repo_name=repo, status=status, severity=severity, page=page, page_size=page_size
+        repo_name=repo, status=status, severity=severity, page=page, page_size=page_size, repo_names=repos
     )
     return Paginated(items=[Review(**i) for i in items], page=page, page_size=page_size, total=total)
 
@@ -438,8 +439,8 @@ async def get_review_detail(review_id: str, _: AuthUser = Depends(require_review
 
 
 @api_router.get("/hitl/pending", response_model=list[HitlItem])
-async def get_hitl_pending():
-    pending = review_repo.list_hitl_pending()
+async def get_hitl_pending(repos: frozenset[str] = Depends(get_accessible_repos)):
+    pending = review_repo.list_hitl_pending(repo_names=repos)
     # Set (not incremented) from this query's own result each time it's
     # polled — see the metric's own docstring (app/services/metrics.py) for
     # why that's deliberate: it tracks the dashboard's actual source of

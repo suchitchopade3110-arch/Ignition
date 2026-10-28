@@ -131,8 +131,15 @@ class ReviewRepository:
         res = self._db.table(self.TABLE).select("*").eq("id", review_id).execute()
         return self._map_review_row(res.data[0]) if res.data else None
 
-    def list_reviews(self, repo_name: str = None, status: str = None, severity: str = None, page: int = 1, page_size: int = 25) -> tuple[list[dict], int]:
+    def list_reviews(self, repo_name: str = None, status: str = None, severity: str = None, page: int = 1, page_size: int = 25,
+                     repo_names=None) -> tuple[list[dict], int]:
+        # repo_names: the caller's accessible repos (audit P0-4). Empty means
+        # nothing to show — return without querying.
+        if repo_names is not None and not repo_names:
+            return [], 0
         query = self._db.table(self.TABLE).select("*", count="exact")
+        if repo_names is not None:
+            query = query.in_("repo_full_name", sorted(repo_names))
         if repo_name:
             query = query.eq("repo_full_name", repo_name)
         if status:
@@ -148,32 +155,37 @@ class ReviewRepository:
         mapped_data = [self._map_review_row(row) for row in res.data]
         return mapped_data, total
 
-    def list_hitl_pending(self) -> list[dict]:
-        res = (
-            self._db.table(self.TABLE)
-            .select("*")
-            .eq("status", "waiting_hitl")
-            .order("created_at", desc=True)
-            .execute()
-        )
+    def list_hitl_pending(self, repo_names=None) -> list[dict]:
+        if repo_names is not None and not repo_names:
+            return []
+        query = self._db.table(self.TABLE).select("*")
+        if repo_names is not None:
+            query = query.in_("repo_full_name", sorted(repo_names))
+        res = query.eq("status", "waiting_hitl").order("created_at", desc=True).execute()
         return [self._map_review_row(row) for row in res.data]
 
-    def get_stats(self) -> dict:
+    def _scoped(self, query, repo_names):
+        return query.in_("repo_full_name", sorted(repo_names)) if repo_names is not None else query
+
+    def get_stats(self, repo_names=None) -> dict:
+        if repo_names is not None and not repo_names:
+            return {"activeReviews": 0, "hitlPending": 0, "avgAcsScore": 0.0, "issuesFound": 0, "issuesFoundTrend": None}
+
         # activeReviews: status="running"
-        running_res = self._db.table(self.TABLE).select("id", count="exact").eq("status", "running").execute()
+        running_res = self._scoped(self._db.table(self.TABLE).select("id", count="exact"), repo_names).eq("status", "running").execute()
         active_reviews = running_res.count if running_res.count is not None else 0
 
         # hitlPending: status="waiting_hitl"
-        hitl_res = self._db.table(self.TABLE).select("id", count="exact").eq("status", "waiting_hitl").execute()
+        hitl_res = self._scoped(self._db.table(self.TABLE).select("id", count="exact"), repo_names).eq("status", "waiting_hitl").execute()
         hitl_pending = hitl_res.count if hitl_res.count is not None else 0
 
         # avgAcsScore: avg acs_score across completed reviews
-        completed_res = self._db.table(self.TABLE).select("acs_score").eq("status", "completed").execute()
+        completed_res = self._scoped(self._db.table(self.TABLE).select("acs_score"), repo_names).eq("status", "completed").execute()
         scores = [float(row["acs_score"]) for row in completed_res.data if row.get("acs_score") is not None]
         avg_acs_score = sum(scores) / len(scores) if scores else 0.0
 
         # issuesFound: sum of findings_count across reviews
-        findings_res = self._db.table(self.TABLE).select("findings_count").execute()
+        findings_res = self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names).execute()
         issues_found = sum(int(row["findings_count"]) for row in findings_res.data if row.get("findings_count") is not None)
 
         return {
@@ -181,10 +193,10 @@ class ReviewRepository:
             "hitlPending": hitl_pending,
             "avgAcsScore": round(avg_acs_score, 1),
             "issuesFound": issues_found,
-            "issuesFoundTrend": self._issues_found_trend(),
+            "issuesFoundTrend": self._issues_found_trend(repo_names),
         }
 
-    def _issues_found_trend(self) -> dict | None:
+    def _issues_found_trend(self, repo_names=None) -> dict | None:
         """
         Week-over-week change in issues found: sum(findings_count) for
         reviews created in the last 7 days vs the 7 days before that.
@@ -198,14 +210,12 @@ class ReviewRepository:
         two_weeks_ago = (now - timedelta(days=14)).isoformat() + "Z"
 
         recent_res = (
-            self._db.table(self.TABLE)
-            .select("findings_count")
+            self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names)
             .gte("created_at", week_ago)
             .execute()
         )
         prior_res = (
-            self._db.table(self.TABLE)
-            .select("findings_count")
+            self._scoped(self._db.table(self.TABLE).select("findings_count"), repo_names)
             .gte("created_at", two_weeks_ago)
             .lt("created_at", week_ago)
             .execute()
@@ -360,9 +370,19 @@ class RepoRepository:
         repo_id = repo_full_name.replace("/", "_")
         self._db.table(self.TABLE).update({"installed": installed}).eq("id", repo_id).execute()
 
-    def list_repos(self) -> list[dict]:
-        repos_res = self._db.table(self.TABLE).select("*").execute()
+    def list_repos(self, repo_names=None) -> list[dict]:
+        if repo_names is not None and not repo_names:
+            return []
+        query = self._db.table(self.TABLE).select("*")
+        if repo_names is not None:
+            # repositories has no repo_full_name column; filter by the derived
+            # id, then drop any row whose real owner/name isn't in the set
+            # (owner_name ids can collide: acme_corp/api vs acme/corp_api).
+            query = query.in_("id", sorted({n.replace("/", "_") for n in repo_names}))
+        repos_res = query.execute()
         repos = repos_res.data or []
+        if repo_names is not None:
+            repos = [r for r in repos if f"{r['owner']}/{r['name']}" in repo_names]
         
         results = []
         for r in repos:

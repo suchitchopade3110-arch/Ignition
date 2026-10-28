@@ -86,16 +86,16 @@ def test_record_hitl_outcome_writes_a_row():
 
 def test_no_history_means_zero_consecutive_rejections():
     ledger, _db = _ledger_with_fake_db()
-    assert ledger.get_consecutive_rejections("some:pattern") == 0
+    assert ledger.get_consecutive_rejections("some:pattern", repo_full_name="acme/widgets") == 0
 
 
 def test_counts_consecutive_rejections_most_recent_first():
     ledger, db = _ledger_with_fake_db()
     for i, outcome in enumerate(["approved", "rejected", "rejected", "rejected"]):
         db.outcomes.rows.append(
-            {"pattern_key": "p", "outcome": outcome, "created_at": i}
+            {"repo_full_name": "acme/widgets", "pattern_key": "p", "outcome": outcome, "created_at": i}
         )
-    assert ledger.get_consecutive_rejections("p") == 3
+    assert ledger.get_consecutive_rejections("p", repo_full_name="acme/widgets") == 3
 
 
 def test_approval_anywhere_in_recent_history_resets_the_streak():
@@ -104,12 +104,21 @@ def test_approval_anywhere_in_recent_history_resets_the_streak():
     ledger, db = _ledger_with_fake_db()
     for i, outcome in enumerate(["rejected", "rejected", "approved", "rejected"]):
         db.outcomes.rows.append(
-            {"pattern_key": "p", "outcome": outcome, "created_at": i}
+            {"repo_full_name": "acme/widgets", "pattern_key": "p", "outcome": outcome, "created_at": i}
         )
-    assert ledger.get_consecutive_rejections("p") == 1
+    assert ledger.get_consecutive_rejections("p", repo_full_name="acme/widgets") == 1
 
 
 def test_rejections_for_a_different_pattern_do_not_count():
     ledger, db = _ledger_with_fake_db()
-    db.outcomes.rows.append({"pattern_key": "other", "outcome": "rejected", "created_at": 0})
-    assert ledger.get_consecutive_rejections("p") == 0
+    db.outcomes.rows.append({"repo_full_name": "acme/widgets", "pattern_key": "other", "outcome": "rejected", "created_at": 0})
+    assert ledger.get_consecutive_rejections("p", repo_full_name="acme/widgets") == 0
+
+
+def test_rejections_of_the_same_pattern_in_another_repo_do_not_count():
+    # Audit P0-4: one tenant's rejections must not demote another tenant's findings.
+    ledger, db = _ledger_with_fake_db()
+    for i in range(3):
+        db.outcomes.rows.append({"repo_full_name": "acme/other", "pattern_key": "p", "outcome": "rejected", "created_at": i})
+    db.outcomes.rows.append({"repo_full_name": "acme/widgets", "pattern_key": "p", "outcome": "rejected", "created_at": 9})
+    assert ledger.get_consecutive_rejections("p", repo_full_name="acme/widgets") == 1

@@ -18,6 +18,7 @@ enforces this for us — we don't try to duplicate GitHub's permission model
 locally). That access token is stored server-side in the `sessions` table
 and never touches the browser.
 """
+import json
 import logging
 import secrets
 from urllib.parse import urlencode
@@ -30,6 +31,7 @@ from app.config import get_settings
 from app.repositories.auth import AuthRepository
 from app.repositories.dashboard import RepoRepository, ReviewRepository
 from app.services.rate_limiter import limiter
+from app.services.redis_client import get_pubsub_redis
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_API_BASE = "https://api.github.com"
 
 _OAUTH_STATE_COOKIE = "ignition_oauth_state"
+# How long a user's resolved repo set is reused before asking GitHub again
+# (audit P0-4). Short enough that a revoked collaborator drops off quickly.
+_REPO_CACHE_TTL_SECONDS = 300
 
 
 class AuthUser(BaseModel):
@@ -82,13 +87,68 @@ async def get_current_user(request: Request) -> AuthUser:
     # Stashed for the repo-access dependencies below, and never sent back
     # to the client — request.state lives only for the life of this request.
     request.state.github_access_token = session["github_access_token"]
-    return AuthUser(
+    user = AuthUser(
         id=u["id"],
         github_id=u["github_id"],
         login=u["login"],
         name=u.get("name"),
         avatar_url=u.get("avatar_url"),
     )
+    request.state.auth_user = user
+    return user
+
+
+def _can_write(permissions: dict | None) -> bool:
+    """Owner, collaborator or org member with write+ — the same rule for the
+    cached repo set and the per-repo check below. Read access to a public
+    repo does not count."""
+    p = permissions or {}
+    return bool(p.get("push") or p.get("maintain") or p.get("admin"))
+
+
+async def get_accessible_repos(request: Request, user: AuthUser = Depends(get_current_user)) -> frozenset[str]:
+    """
+    Every repo the signed-in user can push to, resolved from GitHub once and
+    cached in Redis for 5 minutes (audit P0-4). Every list endpoint filters
+    by this set, so no user sees another tenant's reviews, stats, repos or
+    HITL queue. A Redis problem only skips the cache; a GitHub problem is a
+    502, never an unscoped result.
+    """
+    key = f"user_repos:{user.id}"
+    redis = None
+    try:
+        redis = get_pubsub_redis()
+        cached = await redis.get(key)
+        if cached is not None:
+            return frozenset(json.loads(cached))
+    except Exception:
+        logger.warning("Repo-set cache unavailable; resolving from GitHub", exc_info=True)
+
+    token = getattr(request.state, "github_access_token", None)
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    repos: set[str] = set()
+    url = f"{GITHUB_API_BASE}/user/repos?per_page=100&affiliation=owner,collaborator,organization_member"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        while url:
+            res = await client.get(
+                url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+            )
+            if res.status_code != 200:
+                logger.error("GitHub /user/repos returned %s", res.status_code)
+                raise HTTPException(status_code=502, detail="Could not resolve your repositories from GitHub")
+            for repo in res.json():
+                if _can_write(repo.get("permissions")):
+                    repos.add(repo["full_name"])
+            url = res.links.get("next", {}).get("url")
+
+    if redis is not None:
+        try:
+            await redis.setex(key, _REPO_CACHE_TTL_SECONDS, json.dumps(sorted(repos)))
+        except Exception:
+            logger.warning("Could not cache the repo set", exc_info=True)
+    return frozenset(repos)
 
 
 async def check_repo_access(request: Request, repo_full_name: str) -> None:
@@ -105,6 +165,18 @@ async def check_repo_access(request: Request, repo_full_name: str) -> None:
     if not access_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # The cached repo set answers most checks without a GitHub call (audit
+    # P0-4, and the P2 "access check on every request" item). A repo not in
+    # it — e.g. access granted in the last 5 minutes — still gets the
+    # per-repo check below rather than a flat denial.
+    user = getattr(request.state, "auth_user", None)
+    if isinstance(user, AuthUser):
+        try:
+            if repo_full_name in await get_accessible_repos(request, user):
+                return
+        except HTTPException:
+            pass
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         res = await client.get(
             f"{GITHUB_API_BASE}/repos/{repo_full_name}",
@@ -112,8 +184,7 @@ async def check_repo_access(request: Request, repo_full_name: str) -> None:
         )
 
     if res.status_code == 200:
-        permissions = res.json().get("permissions") or {}
-        if permissions.get("push") or permissions.get("admin") or permissions.get("maintain"):
+        if _can_write(res.json().get("permissions")):
             return
         raise HTTPException(
             status_code=403,

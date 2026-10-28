@@ -56,7 +56,7 @@ class LedgerRepository:
             }
         ).execute()
 
-    def get_consecutive_rejections(self, pattern_key: str, limit: int = 20) -> int:
+    def get_consecutive_rejections(self, pattern_key: str, repo_full_name: str, limit: int = 20) -> int:
         """
         Counts "rejected" outcomes for this pattern, most-recent first,
         stopping at the first "approved" (or the `limit` cutoff). An
@@ -65,10 +65,14 @@ class LedgerRepository:
         counting total rejections ever — a pattern that was rejected 5
         times, approved once, then rejected once more is a streak of 1,
         not 6.
+
+        Scoped to one repo (audit P0-4): another tenant's rejections of the
+        same pattern must not demote this repo's findings.
         """
         result = (
             self._db.table(self.OUTCOMES_TABLE)
             .select("outcome")
+            .eq("repo_full_name", repo_full_name)
             .eq("pattern_key", pattern_key)
             .order("created_at", desc=True)
             .limit(limit)

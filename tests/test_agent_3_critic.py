@@ -202,7 +202,7 @@ class TestAgentThreeCriticNode:
             "app.graph.nodes.agent_3_critic.LedgerRepository",
             lambda: MagicMock(
                 get_baseline=lambda repo: {"acs_score": baseline_acs} if baseline_acs is not None else None,
-                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+                get_consecutive_rejections=lambda pattern_key, repo_full_name: consecutive_rejections,
             ),
         )
         monkeypatch.setattr(
@@ -345,7 +345,7 @@ class TestAgentThreeCriticNode:
         record_incident = AsyncMock()
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.LedgerRepository",
-            lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key: 0),
+            lambda: MagicMock(get_baseline=lambda repo: None, get_consecutive_rejections=lambda pattern_key, repo_full_name: 0),
         )
         monkeypatch.setattr(
             "app.graph.nodes.agent_3_critic.VectorStore",
@@ -484,7 +484,7 @@ class TestHitlSeverityDemotion:
             "app.graph.nodes.agent_3_critic.LedgerRepository",
             lambda: MagicMock(
                 get_baseline=lambda repo: None,
-                get_consecutive_rejections=lambda pattern_key: consecutive_rejections,
+                get_consecutive_rejections=lambda pattern_key, repo_full_name: consecutive_rejections,
             ),
         )
         monkeypatch.setattr("pathlib.Path.read_text", lambda self: "{verified_findings}")
